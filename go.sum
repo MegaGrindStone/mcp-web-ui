@@ -2,6 +2,8 @@ github.com/MegaGrindStone/go-mcp v0.5.0 h1:+Kn18567Br0EZ8bZvXzO4Jmo1qyo/RJ8I6YMs
 github.com/MegaGrindStone/go-mcp v0.5.0/go.mod h1:sTwMIZUB7zLGUHhG8mhYNMCL3HRhj9QDiV4QLBrTH8o=
 github.com/MegaGrindStone/go-mcp v0.5.2-0.20250302060215-04549b1bc610 h1:RjKb5YtwI08JiABF2z+rslEcKOVd5iC/hVB8Sy+FZ9Y=
 github.com/MegaGrindStone/go-mcp v0.5.2-0.20250302060215-04549b1bc610/go.mod h1:Lc+AiPnsHAF/U9acWMilgzKg4hdkzPpymscNrOysMHM=
+github.com/MegaGrindStone/go-mcp v0.6.0 h1:Gm/Ap8XAmD6bNMuoTv7xKhLrs/FhcTqebo09TwjRmZk=
+github.com/MegaGrindStone/go-mcp v0.6.0/go.mod h1:Lc+AiPnsHAF/U9acWMilgzKg4hdkzPpymscNrOysMHM=
 github.com/alecthomas/chroma v0.10.0 h1:7XDcGkCQopCNKjZHfYrNLraA+M7e0fMiJ/Mfikbfjek=
 github.com/alecthomas/chroma v0.10.0/go.mod h1:jtJATyUxlIORhUOFNA9NZDWGAQ8wpxQQqNSB4rjA/1s=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
