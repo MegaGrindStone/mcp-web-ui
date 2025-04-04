@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io/fs"
@@ -55,7 +56,7 @@ func main() {
 		Version: "0.1.0",
 	}
 
-	mcpClients, stdIOCmds := populateMCPClients(cfg, mcpClientInfo)
+	mcpClients, stdIOCmds := populateMCPClients(cfg, mcpClientInfo, logger)
 
 	for i, cli := range mcpClients {
 		logger.Info("Connecting to MCP server", slog.Int("index", i))
@@ -243,13 +244,13 @@ func initLogger(cfg config, cfgDir string) (*slog.Logger, *os.File) {
 	return logger, logFile
 }
 
-func populateMCPClients(cfg config, mcpClientInfo mcp.Info) ([]*mcp.Client, []*exec.Cmd) {
+func populateMCPClients(cfg config, mcpClientInfo mcp.Info, logger *slog.Logger) ([]*mcp.Client, []*exec.Cmd) {
 	var mcpClients []*mcp.Client
 
 	for _, mcpSSEServerConfig := range cfg.MCPSSEServers {
 		sseClient := mcp.NewSSEClient(mcpSSEServerConfig.URL, nil,
-			mcp.WithSSEClientMaxPayloadSize(mcpSSEServerConfig.MaxPayloadSize))
-		cli := mcp.NewClient(mcpClientInfo, sseClient)
+			mcp.WithSSEClientMaxPayloadSize(mcpSSEServerConfig.MaxPayloadSize), mcp.WithSSEClientLogger(logger))
+		cli := mcp.NewClient(mcpClientInfo, sseClient, mcp.WithClientLogger(logger))
 		mcpClients = append(mcpClients, cli)
 	}
 
@@ -266,13 +267,26 @@ func populateMCPClients(cfg config, mcpClientInfo mcp.Info) ([]*mcp.Client, []*e
 		if err != nil {
 			panic(err)
 		}
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			panic(err)
+		}
+
 		if err := cmd.Start(); err != nil {
 			panic(err)
 		}
 
-		cliStdIO := mcp.NewStdIO(out, in)
+		// Listen for stderr output and log it
+		go func() {
+			errScanner := bufio.NewScanner(stderr)
+			for errScanner.Scan() {
+				logger.Error("StdIO error", slog.String("err", errScanner.Text()))
+			}
+		}()
 
-		cli := mcp.NewClient(mcpClientInfo, cliStdIO)
+		cliStdIO := mcp.NewStdIO(out, in, mcp.WithStdIOLogger(logger))
+
+		cli := mcp.NewClient(mcpClientInfo, cliStdIO, mcp.WithClientLogger(logger))
 		mcpClients = append(mcpClients, cli)
 	}
 

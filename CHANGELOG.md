@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Pass logger to MCP client
+
 ### Fixed
 
 - Fix if given chat_id query in home handlers is not found in store
