@@ -115,6 +115,7 @@ The `llm` section supports multiple providers with provider-specific configurati
 
 - **OpenAI**:
   - `apiKey`: OpenAI API key (can use OPENAI_API_KEY env variable)
+  - `endpoint`: OpenAI API endpoint (default: https://api.openai.com/v1)
 
 - **OpenRouter**:
   - `apiKey`: OpenRouter API key (can use OPENROUTER_API_KEY env variable)
@@ -131,6 +132,43 @@ The `genTitleLLM` section allows separate configuration for title generation, de
   - `command`: Command to run server
   - `args`: Arguments for the server command
 
+#### Example MCP Server Configurations
+
+**SSE Server Example:**
+```yaml
+mcpSSEServers:
+  filesystem:
+    url: https://yoursseserver.com
+    maxPayloadSize: 1048576 # 1MB
+```
+
+**StdIO Server Examples:**
+
+1. Using the [official filesystem MCP server](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem):
+```yaml
+mcpStdIOServers:
+  filesystem:
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem"
+      - "/path/to/your/files"
+```
+This example can be used directly as the official filesystem mcp server is an executable package that can be run with npx. Just update the path to point to your desired directory.
+
+2. Using [go-mcp filesystem MCP server](https://github.com/MegaGrindStone/go-mcp/tree/main/servers/filesystem):
+```yaml
+mcpStdIOServers:
+  filesystem:
+    command: go
+    args:
+      - run
+      - github.com/your_username/your_app # Replace with your app
+      - -path
+      - "/data/mcp/filesystem" # Path to expose to MCP clients
+```
+For this example, you'll need to create a new Go application that imports the `github.com/MegaGrindStone/go-mcp/servers/filesystem` package. The flag naming (like `-path` in this example) is completely customizable based on how you structure your own application - it doesn't have to be called "path". [This example](https://github.com/MegaGrindStone/go-mcp/blob/main/example/filesystem/main.go) is merely a starting point showing one possible implementation where a flag is used to specify which directory to expose. You're free to design your own application structure and command-line interface according to your specific needs.
+
 ### Example Configuration Snippet
 ```yaml
 port: 8080
@@ -140,9 +178,9 @@ systemPrompt: You are a helpful assistant.
 llm:
   provider: anthropic
   model: claude-3-5-sonnet-20241022
+  maxTokens: 1000
   parameters:
     temperature: 0.7
-    maxTokens: 1000
 
 genTitleLLM:
   provider: openai
