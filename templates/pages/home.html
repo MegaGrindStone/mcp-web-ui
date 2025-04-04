@@ -128,6 +128,15 @@
               {{template "chatbox" .}}
             {{else}}
               {{template "welcome" .}}
+              <script>
+                // Only redirect if we have a chat_id in the URL but no valid chat was found
+                const urlParams = new URLSearchParams(window.location.search);
+                const hasChatIdParam = urlParams.has('chat_id');
+                
+                if (hasChatIdParam) {
+                  window.location.href = '/';
+                }
+              </script>
             {{end}}
         </div>
     </div>
