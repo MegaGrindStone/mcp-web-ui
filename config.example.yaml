@@ -33,6 +33,7 @@ llm:
   maxTokens: 1000
   # openai
   apiKey: YOUR_API_KEY # Default to environment variable OPENAI_API_KEY
+  endpoint: "" # Default to "https://api.openai.com/v1"
   # openrouter
   apiKey: YOUR_API_KEY # Default to environment variable OPENROUTER_API_KEY
 genTitleLLM: # Default to the same LLM as the main LLM

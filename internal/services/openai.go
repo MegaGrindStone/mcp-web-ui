@@ -28,12 +28,25 @@ type OpenAI struct {
 }
 
 // NewOpenAI creates a new OpenAI instance with the specified API key, base URL, model name, and system prompt.
-func NewOpenAI(apiKey, model, systemPrompt string, params LLMParameters, logger *slog.Logger) OpenAI {
+func NewOpenAI(
+	apiKey, model, systemPrompt, endpoint string,
+	params LLMParameters,
+	logger *slog.Logger,
+) OpenAI {
+	var client *goopenai.Client
+	if endpoint == "" {
+		client = goopenai.NewClient(apiKey)
+	} else {
+		cfg := goopenai.DefaultConfig(apiKey)
+		cfg.BaseURL = endpoint
+		client = goopenai.NewClientWithConfig(cfg)
+	}
+
 	return OpenAI{
 		model:        model,
 		systemPrompt: systemPrompt,
 		params:       params,
-		client:       goopenai.NewClient(apiKey),
+		client:       client,
 		logger:       logger.With(slog.String("module", "openai")),
 	}
 }
