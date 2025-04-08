@@ -116,6 +116,7 @@ The `llm` section supports multiple providers with provider-specific configurati
 - **OpenAI**:
   - `apiKey`: OpenAI API key (can use OPENAI_API_KEY env variable)
   - `endpoint`: OpenAI API endpoint (default: https://api.openai.com/v1)
+  - For using alternative OpenAI-compatible APIs, see [this discussion thread](https://github.com/MegaGrindStone/mcp-web-ui/discussions/7)
 
 - **OpenRouter**:
   - `apiKey`: OpenRouter API key (can use OPENROUTER_API_KEY env variable)
