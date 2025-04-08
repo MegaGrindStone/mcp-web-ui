@@ -112,6 +112,7 @@ The `llm` section supports multiple providers with provider-specific configurati
 - **Anthropic**:
   - `apiKey`: Anthropic API key (can use ANTHROPIC_API_KEY env variable)
   - `maxTokens`: Maximum token limit
+  - Note: Stop sequences containing only whitespace are ignored, and whitespace is trimmed from valid sequences as Anthropic doesn't support whitespace in stop sequences
 
 - **OpenAI**:
   - `apiKey`: OpenAI API key (can use OPENAI_API_KEY env variable)

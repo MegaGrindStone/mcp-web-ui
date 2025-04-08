@@ -57,6 +57,9 @@ genTitleLLM: # Default to the same LLM as the main LLM
     stop:
       - "\n"
       - "\n\n"
+      # Note: For Anthropic provider, stop sequences containing only whitespace are ignored, 
+      # and whitespace is trimmed from valid sequences as Anthropic doesn't support whitespace 
+      # in stop sequences
     includeReasoning: true
 mcpSSEServers:
   filesystem:

@@ -9,6 +9,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"strings"
 
 	"github.com/MegaGrindStone/go-mcp"
 	"github.com/MegaGrindStone/mcp-web-ui/internal/models"
@@ -313,6 +314,19 @@ func (a Anthropic) doRequest(
 		}
 	}
 
+	// Filter out invalid stop sequences by trimming whitespace
+	// because antrhopic doesn't support whitespace in stop sequences
+	var validStopSequences []string
+	if a.params.Stop != nil {
+		for _, seq := range a.params.Stop {
+			// Trim all whitespace and check if anything remains
+			trimmed := strings.TrimSpace(seq)
+			if trimmed != "" {
+				validStopSequences = append(validStopSequences, trimmed)
+			}
+		}
+	}
+
 	reqBody := anthropicChatRequest{
 		Model:     a.model,
 		Messages:  msgs,
@@ -321,7 +335,7 @@ func (a Anthropic) doRequest(
 		Tools:     aTools,
 		Stream:    stream,
 
-		StopSequences: a.params.Stop,
+		StopSequences: validStopSequences,
 		Temperature:   a.params.Temperature,
 		TopK:          a.params.TopK,
 		TopP:          a.params.TopP,

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Trim whitespace from stop sequences parameters on `Anthropic`, because Anthropic API doesn't support it
+
 ## [0.1.1] - 2025-04-05
 
 This update introduces configuration flexibility for OpenAI API endpoints, improves system logging capabilities, and fixes a navigation issue with non-existent chat conversations, collectively enhancing both the system's stability and customization options.
