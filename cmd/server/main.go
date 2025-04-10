@@ -92,6 +92,7 @@ func main() {
 	mux.Handle("/static/", http.StripPrefix("/static/", fileServer))
 	mux.HandleFunc("/", m.HandleHome)
 	mux.HandleFunc("/chats", m.HandleChats)
+	mux.HandleFunc("/refresh-title", m.HandleRefreshTitle)
 	mux.HandleFunc("/sse/messages", m.HandleSSE)
 	mux.HandleFunc("/sse/chats", m.HandleSSE)
 

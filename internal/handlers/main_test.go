@@ -161,6 +161,155 @@ func TestHandleChats(t *testing.T) {
 	}
 }
 
+func TestHandleRefreshTitle(t *testing.T) {
+	// Test success case first
+	t.Run("Success", func(t *testing.T) {
+		llm := &mockLLM{}
+		store := &mockStore{
+			chats: []models.Chat{
+				{ID: "1", Title: "Old Title"},
+			},
+			messages: map[string][]models.Message{
+				"1": {
+					{
+						ID:   "msg1",
+						Role: models.RoleUser,
+						Contents: []models.Content{
+							{
+								Type: models.ContentTypeText,
+								Text: "First user message",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		main, err := handlers.NewMain(llm, llm, store, nil, slog.Default())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		form := strings.NewReader("chat_id=1")
+		req := httptest.NewRequest(http.MethodPost, "/refresh-title", form)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+
+		main.HandleRefreshTitle(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("HandleRefreshTitle() status = %v, want %v", w.Code, http.StatusOK)
+		}
+
+		if !strings.Contains(w.Body.String(), "Test Chat") {
+			t.Errorf("HandleRefreshTitle() body = %v, want to contain %v", w.Body.String(), "Test Chat")
+		}
+
+		// Verify chat title was updated
+		if store.chats[0].Title != "Test Chat" {
+			t.Errorf("Chat title not updated, got %s, want %s", store.chats[0].Title, "Test Chat")
+		}
+	})
+
+	// Test various error cases
+	tests := []struct {
+		name       string
+		method     string
+		chatID     string
+		messages   map[string][]models.Message
+		err        error
+		wantStatus int
+	}{
+		{
+			name:       "Invalid method",
+			method:     http.MethodGet,
+			chatID:     "1",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:       "Missing chat_id",
+			method:     http.MethodPost,
+			chatID:     "",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "No messages",
+			method:     http.MethodPost,
+			chatID:     "1",
+			messages:   map[string][]models.Message{"1": {}},
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:   "No user messages",
+			method: http.MethodPost,
+			chatID: "1",
+			messages: map[string][]models.Message{
+				"1": {
+					{
+						ID:   "msg3",
+						Role: models.RoleAssistant,
+						Contents: []models.Content{
+							{
+								Type: models.ContentTypeText,
+								Text: "Assistant message",
+							},
+						},
+					},
+				},
+			},
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:   "Store error",
+			method: http.MethodPost,
+			chatID: "1",
+			messages: map[string][]models.Message{
+				"1": {
+					{
+						ID:   "msg1",
+						Role: models.RoleUser,
+						Contents: []models.Content{
+							{
+								Type: models.ContentTypeText,
+								Text: "Hello",
+							},
+						},
+					},
+				},
+			},
+			err:        fmt.Errorf("store error"),
+			wantStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			llm := &mockLLM{}
+			store := &mockStore{
+				chats:    []models.Chat{{ID: "1", Title: "Old Title"}},
+				messages: tt.messages,
+				err:      tt.err,
+			}
+
+			main, err := handlers.NewMain(llm, llm, store, nil, slog.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			form := strings.NewReader("chat_id=" + tt.chatID)
+			req := httptest.NewRequest(tt.method, "/refresh-title", form)
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+
+			main.HandleRefreshTitle(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("HandleRefreshTitle() status = %v, want %v", w.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
 func (m mockLLM) Chat(_ context.Context, _ []models.Message, _ []mcp.Tool) iter.Seq2[models.Content, error] {
 	return func(yield func(models.Content, error) bool) {
 		if m.err != nil {

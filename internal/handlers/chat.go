@@ -222,6 +222,106 @@ func (m Main) HandleChats(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandleRefreshTitle handles requests to regenerate a chat title. It accepts POST requests with a chat_id
+// parameter, retrieves the first user message from the chat history, and uses the title generator to create
+// a new title. The handler updates the chat title in the database and returns the new title to be displayed.
+//
+// The function expects a "chat_id" form field identifying which chat's title should be refreshed.
+// After updating the database, it asynchronously notifies all connected clients through Server-Sent Events (SSE)
+// to maintain UI consistency across sessions while immediately returning the new title text to the requesting client.
+//
+// The function returns appropriate HTTP error responses for invalid methods, missing required fields,
+// or when no messages are found for title generation. On success, it returns just the title text to be
+// inserted into the targeted span element via HTMX.
+func (m Main) HandleRefreshTitle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		m.logger.Error("Method not allowed", slog.String("method", r.Method))
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	chatID := r.FormValue("chat_id")
+	if chatID == "" {
+		m.logger.Error("Chat ID is required")
+		http.Error(w, "Chat ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get messages to find first user message
+	messages, err := m.store.Messages(r.Context(), chatID)
+	if err != nil {
+		m.logger.Error("Failed to get messages",
+			slog.String("chatID", chatID),
+			slog.String(errLoggerKey, err.Error()))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if len(messages) == 0 {
+		m.logger.Error("No messages found for chat", slog.String("chatID", chatID))
+		http.Error(w, "No messages found for chat", http.StatusNotFound)
+		return
+	}
+
+	// Find first user message for title generation
+	var firstUserMessage string
+	for _, msg := range messages {
+		if msg.Role == models.RoleUser && len(msg.Contents) > 0 && msg.Contents[0].Type == models.ContentTypeText {
+			firstUserMessage = msg.Contents[0].Text
+			break
+		}
+	}
+
+	if firstUserMessage == "" {
+		m.logger.Error("No user message found for title generation", slog.String("chatID", chatID))
+		http.Error(w, "No user message found for title generation", http.StatusInternalServerError)
+		return
+	}
+
+	// Generate and update title
+	title, err := m.titleGenerator.GenerateTitle(r.Context(), firstUserMessage)
+	if err != nil {
+		m.logger.Error("Error generating chat title",
+			slog.String("message", firstUserMessage),
+			slog.String(errLoggerKey, err.Error()))
+		http.Error(w, "Failed to generate title", http.StatusInternalServerError)
+		return
+	}
+
+	updatedChat := models.Chat{
+		ID:    chatID,
+		Title: title,
+	}
+	if err := m.store.UpdateChat(r.Context(), updatedChat); err != nil {
+		m.logger.Error("Failed to update chat title",
+			slog.String(errLoggerKey, err.Error()))
+		http.Error(w, "Failed to update chat title", http.StatusInternalServerError)
+		return
+	}
+
+	// Update all clients via SSE asynchronously
+	go func() {
+		divs, err := m.chatDivs(chatID)
+		if err != nil {
+			m.logger.Error("Failed to generate chat divs",
+				slog.String(errLoggerKey, err.Error()))
+			return
+		}
+
+		msg := sse.Message{
+			Type: chatsSSEType,
+		}
+		msg.AppendData(divs)
+		if err := m.sseSrv.Publish(&msg, chatsSSETopic); err != nil {
+			m.logger.Error("Failed to publish chats",
+				slog.String(errLoggerKey, err.Error()))
+		}
+	}()
+
+	// Return just the title text for HTMX to insert into the span
+	fmt.Fprintf(w, "%s", title)
+}
+
 func (m Main) newChat() (string, error) {
 	newChat := models.Chat{
 		ID: uuid.New().String(),

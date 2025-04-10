@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add refresh title feature to refresh chat title from LLM
+
 ### Fixed
 
 - Trim whitespace from stop sequences parameters on `Anthropic`, because Anthropic API doesn't support it
