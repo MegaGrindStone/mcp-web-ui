@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	github.com/MegaGrindStone/go-mcp v0.6.1-0.20250404160514-74615b3f6d9f
+	github.com/MegaGrindStone/go-mcp v0.6.2-0.20250415040504-b9c7bb4e9f64
 	github.com/sashabaranov/go-openai v1.36.1
 	github.com/yuin/goldmark v1.7.8
 	github.com/yuin/goldmark-highlighting v0.0.0-20220208100518-594be1970594
