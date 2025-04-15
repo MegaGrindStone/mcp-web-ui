@@ -50,16 +50,22 @@ func callToolError(err error) json.RawMessage {
 }
 
 // HandleChats processes chat interactions through HTTP POST requests,
-// managing both new chat creation and message handling. It accepts user messages through form data,
-// creates appropriate chat contexts, and initiates asynchronous processing for AI responses and chat title generation.
+// managing both new chat creation and message handling. It supports two input methods:
+// 1. Regular messages via the "message" form field
+// 2. Predefined prompts via "prompt_name" and "prompt_args" form fields
 //
-// The handler expects a "message" form field and an optional "chat_id" field.
-// If no chat_id is provided, it creates a new chat session. The handler streams AI responses through
-// Server-Sent Events (SSE) and updates the UI accordingly through template rendering.
+// The handler expects an optional "chat_id" field. If no chat_id is provided,
+// it creates a new chat session. For new chats, it asynchronously generates a title
+// based on the first message or prompt.
+//
+// The function handles different rendering strategies based on whether it's a new chat
+// (complete chatbox template) or an existing chat (individual message templates). For
+// all chats, it adds messages to the database and initiates asynchronous AI response
+// generation that will be streamed via Server-Sent Events (SSE).
 //
 // The function returns appropriate HTTP error responses for invalid methods, missing required fields,
-// or internal processing errors. For successful requests, it renders either a complete chatbox template
-// for new chats or individual message templates for existing chats.
+// or internal processing errors. For successful requests, it renders the appropriate templates
+// with messages marked with correct streaming states.
 func (m Main) HandleChats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		m.logger.Error("Method not allowed", slog.String("method", r.Method))
@@ -67,18 +73,10 @@ func (m Main) HandleChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := r.FormValue("message")
-	if msg == "" {
-		m.logger.Error("Message is required")
-		http.Error(w, "Message is required", http.StatusBadRequest)
-		return
-	}
-
 	var err error
-
 	chatID := r.FormValue("chat_id")
-	// We track if this is a new chat to determine the appropriate template rendering strategy
 	isNewChat := false
+
 	if chatID == "" {
 		chatID, err = m.newChat()
 		if err != nil {
@@ -95,25 +93,47 @@ func (m Main) HandleChats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// We create two messages: user's input and a placeholder for AI response
-	um := models.Message{
-		ID:   uuid.New().String(),
-		Role: models.RoleUser,
-		Contents: []models.Content{
-			{
-				Type: models.ContentTypeText,
-				Text: msg,
-			},
-		},
-		Timestamp: time.Now(),
+	var userMessages []models.Message
+	var addedMessageIDs []string
+	var firstMessageForTitle string
+
+	// Process input based on type (prompt or regular message)
+	promptName := r.FormValue("prompt_name")
+	if promptName != "" {
+		// Handle prompt-based input
+		promptArgs := r.FormValue("prompt_args")
+		userMessages, firstMessageForTitle, err = m.processPromptInput(r.Context(), promptName, promptArgs)
+		if err != nil {
+			m.logger.Error("Failed to process prompt",
+				slog.String("promptName", promptName),
+				slog.String(errLoggerKey, err.Error()))
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Handle regular message input
+		msg := r.FormValue("message")
+		if msg == "" {
+			m.logger.Error("Message is required")
+			http.Error(w, "Message is required", http.StatusBadRequest)
+			return
+		}
+
+		firstMessageForTitle = msg
+		userMessages = []models.Message{m.processUserMessage(msg)}
 	}
-	userMsgID, err := m.store.AddMessage(r.Context(), chatID, um)
-	if err != nil {
-		m.logger.Error("Failed to add user message",
-			slog.String("message", fmt.Sprintf("%+v", um)),
-			slog.String(errLoggerKey, err.Error()))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+
+	// Add all user messages to the chat
+	for _, msg := range userMessages {
+		msgID, err := m.store.AddMessage(r.Context(), chatID, msg)
+		if err != nil {
+			m.logger.Error("Failed to add message",
+				slog.String("message", fmt.Sprintf("%+v", msg)),
+				slog.String(errLoggerKey, err.Error()))
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		addedMessageIDs = append(addedMessageIDs, msgID)
 	}
 
 	// Initialize empty AI message to be streamed later
@@ -144,80 +164,172 @@ func (m Main) HandleChats(w http.ResponseWriter, r *http.Request) {
 	go m.chat(chatID, messages)
 
 	if isNewChat {
-		go m.generateChatTitle(chatID, msg)
+		go m.generateChatTitle(chatID, firstMessageForTitle)
+		m.renderNewChatResponse(w, chatID, messages, aiMsgID)
+		return
+	}
 
-		// For new chats, we prepare all messages with appropriate streaming states
-		msgs := make([]message, len(messages))
-		for i := range messages {
-			// Mark only the AI message as "loading", others as "ended"
-			streamingState := "ended"
-			if messages[i].ID == aiMsgID {
-				streamingState = "loading"
-			}
-			content, err := models.RenderContents(messages[i].Contents)
-			if err != nil {
-				m.logger.Error("Failed to render contents",
-					slog.String("message", fmt.Sprintf("%+v", messages[i])),
-					slog.String(errLoggerKey, err.Error()))
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			msgs[i] = message{
-				ID:             messages[i].ID,
-				Role:           string(messages[i].Role),
-				Content:        content,
-				Timestamp:      messages[i].Timestamp,
-				StreamingState: streamingState,
-			}
+	// For existing chats, render each message separately
+	m.renderExistingChatResponse(w, messages, addedMessageIDs, am, aiMsgID)
+}
+
+// processPromptInput handles prompt-based inputs, extracting arguments and retrieving
+// prompt messages from the MCP client.
+func (m Main) processPromptInput(ctx context.Context, promptName, promptArgs string) ([]models.Message, string, error) {
+	var args map[string]string
+	if err := json.Unmarshal([]byte(promptArgs), &args); err != nil {
+		return nil, "", fmt.Errorf("invalid prompt arguments: %w", err)
+	}
+
+	// Get the prompt data directly from the server
+	clientIdx, ok := m.promptsMap[promptName]
+	if !ok {
+		return nil, "", fmt.Errorf("prompt not found: %s", promptName)
+	}
+
+	promptResult, err := m.mcpClients[clientIdx].GetPrompt(ctx, mcp.GetPromptParams{
+		Name:      promptName,
+		Arguments: args,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get prompt: %w", err)
+	}
+
+	// Convert prompt messages to our internal model format
+	messages := make([]models.Message, 0, len(promptResult.Messages))
+	firstMessageText := ""
+
+	for i, promptMsg := range promptResult.Messages {
+		// For now, ignore non-text content
+		if promptMsg.Content.Type != mcp.ContentTypeText {
+			continue
+		}
+		content := promptMsg.Content.Text
+
+		// Save the first message for title generation
+		if i == 0 {
+			firstMessageText = content
 		}
 
-		data := homePageData{
-			CurrentChatID: chatID,
-			Messages:      msgs,
+		messages = append(messages, models.Message{
+			ID:   uuid.New().String(),
+			Role: models.Role(promptMsg.Role),
+			Contents: []models.Content{
+				{
+					Type: models.ContentTypeText,
+					Text: content,
+				},
+			},
+			Timestamp: time.Now(),
+		})
+	}
+
+	return messages, firstMessageText, nil
+}
+
+// processUserMessage handles standard user message inputs.
+func (m Main) processUserMessage(message string) models.Message {
+	return models.Message{
+		ID:   uuid.New().String(),
+		Role: models.RoleUser,
+		Contents: []models.Content{
+			{
+				Type: models.ContentTypeText,
+				Text: message,
+			},
+		},
+		Timestamp: time.Now(),
+	}
+}
+
+// renderNewChatResponse renders the complete chatbox for new chats.
+func (m Main) renderNewChatResponse(w http.ResponseWriter, chatID string, messages []models.Message, aiMsgID string) {
+	msgs := make([]message, len(messages))
+	for i := range messages {
+		// Mark only the AI message as "loading", others as "ended"
+		streamingState := "ended"
+		if messages[i].ID == aiMsgID {
+			streamingState = "loading"
 		}
-		err = m.templates.ExecuteTemplate(w, "chatbox", data)
+		content, err := models.RenderContents(messages[i].Contents)
 		if err != nil {
+			m.logger.Error("Failed to render contents",
+				slog.String("message", fmt.Sprintf("%+v", messages[i])),
+				slog.String(errLoggerKey, err.Error()))
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		return
+		msgs[i] = message{
+			ID:             messages[i].ID,
+			Role:           string(messages[i].Role),
+			Content:        content,
+			Timestamp:      messages[i].Timestamp,
+			StreamingState: streamingState,
+		}
 	}
 
-	userContent, err := models.RenderContents(um.Contents)
+	data := homePageData{
+		CurrentChatID: chatID,
+		Messages:      msgs,
+	}
+	if err := m.templates.ExecuteTemplate(w, "chatbox", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// renderExistingChatResponse renders each message individually for existing chats.
+func (m Main) renderExistingChatResponse(w http.ResponseWriter, messages []models.Message, addedMessageIDs []string,
+	aiMessage models.Message, aiMsgID string,
+) {
+	for _, msgID := range addedMessageIDs {
+		for i := range messages {
+			if messages[i].ID == msgID {
+				content, err := models.RenderContents(messages[i].Contents)
+				if err != nil {
+					m.logger.Error("Failed to render contents",
+						slog.String("message", fmt.Sprintf("%+v", messages[i])),
+						slog.String(errLoggerKey, err.Error()))
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+
+				templateName := "user_message"
+				if messages[i].Role == models.RoleAssistant {
+					templateName = "ai_message"
+				}
+
+				if err := m.templates.ExecuteTemplate(w, templateName, message{
+					ID:             msgID,
+					Role:           string(messages[i].Role),
+					Content:        content,
+					Timestamp:      messages[i].Timestamp,
+					StreamingState: "ended",
+				}); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				break
+			}
+		}
+	}
+
+	// Render AI response message (always the last one added)
+	aiContent, err := models.RenderContents(aiMessage.Contents)
 	if err != nil {
 		m.logger.Error("Failed to render contents",
-			slog.String("message", fmt.Sprintf("%+v", um)),
+			slog.String("message", fmt.Sprintf("%+v", aiMessage)),
 			slog.String(errLoggerKey, err.Error()))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	err = m.templates.ExecuteTemplate(w, "user_message", message{
-		ID:             userMsgID,
-		Role:           string(um.Role),
-		Content:        userContent,
-		Timestamp:      um.Timestamp,
-		StreamingState: "ended",
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
-	aiContent, err := models.RenderContents(am.Contents)
-	if err != nil {
-		m.logger.Error("Failed to render contents",
-			slog.String("message", fmt.Sprintf("%+v", am)),
-			slog.String(errLoggerKey, err.Error()))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	err = m.templates.ExecuteTemplate(w, "ai_message", message{
+	if err := m.templates.ExecuteTemplate(w, "ai_message", message{
 		ID:             aiMsgID,
-		Role:           string(am.Role),
+		Role:           string(aiMessage.Role),
 		Content:        aiContent,
-		Timestamp:      am.Timestamp,
+		Timestamp:      aiMessage.Timestamp,
 		StreamingState: "loading",
-	})
-	if err != nil {
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

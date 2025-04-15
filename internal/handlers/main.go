@@ -55,8 +55,9 @@ type Main struct {
 	resources []mcp.Resource
 	prompts   []mcp.Prompt
 
-	toolsMap map[string]int // Map of tool names to mcpClients index.
-	logger   *slog.Logger
+	promptsMap map[string]int // Map of prompt names to mcpClients index.
+	toolsMap   map[string]int // Map of tool names to mcpClients index.
+	logger     *slog.Logger
 }
 
 const (
@@ -89,6 +90,7 @@ func NewMain(
 	tools := make([]mcp.Tool, 0, len(mcpClients))
 	resources := make([]mcp.Resource, 0, len(mcpClients))
 	prompts := make([]mcp.Prompt, 0, len(mcpClients))
+	pm := make(map[string]int)
 	tm := make(map[string]int)
 	for i := range mcpClients {
 		servers[i] = mcpClients[i].ServerInfo()
@@ -122,6 +124,9 @@ func NewMain(
 				return Main{}, fmt.Errorf("failed to list prompts from server %s: %w", serverName, err)
 			}
 			ps = listPrompts.Prompts
+			for _, prompt := range ps {
+				pm[prompt.Name] = i
+			}
 		}
 
 		tools = append(tools, ts...)
@@ -153,6 +158,7 @@ func NewMain(
 		titleGenerator: titleGen,
 		store:          store,
 		mcpClients:     mcpClients,
+		promptsMap:     pm,
 		toolsMap:       tm,
 		logger:         logger.With(slog.String("module", "main")),
 		servers:        servers,

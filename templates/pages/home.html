@@ -107,10 +107,11 @@
                             <div id="collapseFour" class="accordion-collapse collapse" data-bs-parent="#mcpAccordion">
                                 <div class="accordion-body">
                                     <div class="list-group list-group-flush">
-                                        {{range .Prompts}}
-                                        <div class="list-group-item" role="button" style="cursor: pointer">
+                                        {{range $index, $prompt := .Prompts}}
+                                        <div class="list-group-item" role="button" style="cursor: pointer" 
+                                            onclick="showPromptModal({{$index}})">
                                             <div class="d-flex justify-content-between align-items-center">
-                                                <span>{{.Name}}</span>
+                                                <span>{{$prompt.Name}}</span>
                                             </div>
                                         </div>
                                         {{end}}
@@ -159,6 +160,29 @@
     </div>
 </div>
 
+<div class="modal fade" id="promptModal" tabindex="-1" aria-labelledby="promptModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="promptModalLabel">Prompt Arguments</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p id="promptDescription" class="mb-3"></p>
+                <form id="promptForm">
+                    <div id="promptArguments">
+                        <!-- Arguments will be dynamically added here -->
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="usePromptBtn">Use Prompt</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 function showServerModal(serverName) {
     const modalText = document.getElementById('serverModalText');
@@ -182,5 +206,137 @@ function adjustHeight(element) {
     element.style.height = 'auto';
     element.style.height = (element.scrollHeight) + 'px';
 }
+
+// Store the prompts data
+const promptsList = [{{range $index, $prompt := .Prompts}}
+    {
+        name: `{{$prompt.Name}}`,
+        description: `{{$prompt.Description}}`,
+        arguments: [{{range $prompt.Arguments}}
+            {
+                name: `{{.Name}}`,
+                description: `{{.Description}}`,
+                required: {{.Required}}
+            },{{end}}
+        ]
+    },{{end}}
+];
+
+function showPromptModal(promptIndex) {
+    const promptData = promptsList[promptIndex];
+    if (!promptData) {
+        console.error('Prompt not found at index:', promptIndex);
+        return;
+    }
+    
+    // Set the modal title and description
+    document.getElementById('promptModalLabel').textContent = `Prompt: ${promptData.name}`;
+    const descElem = document.getElementById('promptDescription');
+    descElem.textContent = promptData.description || '';
+    
+    // Get the form element where we'll add the inputs
+    const argContainer = document.getElementById('promptArguments');
+    argContainer.innerHTML = '';
+    
+    // Create input fields for each argument
+    if (promptData.arguments && promptData.arguments.length > 0) {
+        promptData.arguments.forEach(arg => {
+            const formGroup = document.createElement('div');
+            formGroup.className = 'mb-3';
+            
+            const label = document.createElement('label');
+            label.htmlFor = `arg-${arg.name}`;
+            label.className = 'form-label';
+            label.textContent = arg.name;
+            if (arg.required) {
+                label.textContent += ' *';
+            }
+            
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'form-control';
+            input.id = `arg-${arg.name}`;
+            input.name = arg.name;
+            input.required = arg.required;
+            
+            formGroup.appendChild(label);
+            formGroup.appendChild(input);
+            
+            if (arg.description) {
+                const helpText = document.createElement('div');
+                helpText.className = 'form-text';
+                helpText.textContent = arg.description;
+                formGroup.appendChild(helpText);
+            }
+            
+            argContainer.appendChild(formGroup);
+        });
+    } else {
+        // If there are no arguments, show a message
+        const noArgsMsg = document.createElement('p');
+        noArgsMsg.textContent = 'This prompt has no arguments.';
+        argContainer.appendChild(noArgsMsg);
+    }
+    
+    // Set up the "Use Prompt" button handler
+    document.getElementById('usePromptBtn').onclick = function() {
+        // Collect prompt data and arguments
+        const args = {};
+        const promptName = promptData.name;
+        
+        if (promptData.arguments) {
+            promptData.arguments.forEach(arg => {
+                const input = document.getElementById(`arg-${arg.name}`);
+                if (input) {
+                    args[arg.name] = input.value;
+                }
+            });
+        }
+        
+        // Determine which form to use
+        const isWelcomePage = document.getElementById('chat-form-welcome') !== null;
+        const formId = isWelcomePage ? 'chat-form-welcome' : 'chat-form-chatbox';
+        const form = document.getElementById(formId);
+
+        // Get the textarea and temporarily remove required attribute
+        const textarea = form.querySelector('textarea[name="message"]');
+        textarea.removeAttribute('required');
+
+        // Clear the message field and set prompt data
+        textarea.value = '';
+        form.querySelector('input[name="prompt_name"]').value = promptName;
+        form.querySelector('input[name="prompt_args"]').value = JSON.stringify(args);
+        
+        // Set up a one-time event listener for after the request completes
+        form.addEventListener('htmx:afterRequest', function afterRequest() {
+            // Restore the required attribute and clear prompt fields
+            textarea.setAttribute('required', '');
+            form.querySelector('input[name="prompt_name"]').value = '';
+            form.querySelector('input[name="prompt_args"]').value = '';
+            
+            // Remove this event listener to prevent it from firing on future requests
+            form.removeEventListener('htmx:afterRequest', afterRequest);
+        }, { once: true });
+        
+        // Submit the form
+        htmx.trigger(form, 'submit');
+        
+        // Close the modal
+        bootstrap.Modal.getInstance(document.getElementById('promptModal')).hide();
+    };
+    
+    // Show the modal
+    new bootstrap.Modal(document.getElementById('promptModal')).show();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Fix any trailing commas in arrays
+    for (let i = 0; i < promptsList.length; i++) {
+        if (promptsList[i].arguments && promptsList[i].arguments.length > 0) {
+            // Remove any undefined items that may have been created by trailing commas
+            promptsList[i].arguments = promptsList[i].arguments.filter(item => item !== undefined);
+        }
+    }
+});
 </script>
 {{end}}

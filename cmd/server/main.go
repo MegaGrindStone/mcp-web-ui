@@ -93,6 +93,7 @@ func main() {
 	mux.HandleFunc("/", m.HandleHome)
 	mux.HandleFunc("/chats", m.HandleChats)
 	mux.HandleFunc("/refresh-title", m.HandleRefreshTitle)
+	mux.HandleFunc("/use-prompt", m.HandleUsePrompt)
 	mux.HandleFunc("/sse/messages", m.HandleSSE)
 	mux.HandleFunc("/sse/chats", m.HandleSSE)
 
