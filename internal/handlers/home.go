@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -110,39 +108,4 @@ func (m Main) HandleHome(w http.ResponseWriter, r *http.Request) {
 // This endpoint enables real-time updates for the client.
 func (m Main) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	m.sseSrv.ServeHTTP(w, r)
-}
-
-// HandleUsePrompt processes a prompt request and returns formatted text to be inserted in the message textarea.
-func (m Main) HandleUsePrompt(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var params mcp.GetPromptParams
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		m.logger.Error("Failed to decode prompt request", slog.String(errLoggerKey, err.Error()))
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	clientIdx, ok := m.promptsMap[params.Name]
-	if !ok {
-		m.logger.Error("Prompt not found", slog.String("promptName", params.Name))
-		http.Error(w, "Prompt not found", http.StatusNotFound)
-	}
-
-	res, err := m.mcpClients[clientIdx].GetPrompt(context.Background(), params)
-	if err != nil {
-		m.logger.Error("Failed to get prompt", slog.String("promptName", params.Name), slog.String(errLoggerKey, err.Error()))
-		http.Error(w, "Failed to get prompt", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(res); err != nil {
-		m.logger.Error("Failed to encode prompt response", slog.String(errLoggerKey, err.Error()))
-		http.Error(w, "Failed to encode prompt response", http.StatusInternalServerError)
-		return
-	}
 }

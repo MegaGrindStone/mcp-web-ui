@@ -114,40 +114,57 @@ func TestHandleChats(t *testing.T) {
 	tests := []struct {
 		name       string
 		method     string
-		message    string
-		chatID     string
+		formData   string
 		wantStatus int
 	}{
 		{
 			name:       "Invalid method",
 			method:     http.MethodGet,
+			formData:   "",
 			wantStatus: http.StatusMethodNotAllowed,
 		},
 		{
-			name:       "Empty message",
+			name:       "Empty message and no prompt",
 			method:     http.MethodPost,
+			formData:   "chat_id=",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "New chat",
+			name:       "New chat with message",
 			method:     http.MethodPost,
-			message:    "Hello",
+			formData:   "message=Hello",
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "Existing chat",
+			name:       "Existing chat with message",
 			method:     http.MethodPost,
-			message:    "Hello",
-			chatID:     "1",
+			formData:   "message=Hello&chat_id=1",
 			wantStatus: http.StatusOK,
+		},
+		// Testing prompt functionality with invalid inputs
+		{
+			name:       "Invalid prompt arguments",
+			method:     http.MethodPost,
+			formData:   `prompt_name=test_prompt&prompt_args=invalid_json`,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "Prompt without args",
+			method:     http.MethodPost,
+			formData:   `prompt_name=test_prompt`,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "Prompt not found",
+			method:     http.MethodPost,
+			formData:   `prompt_name=unknown_prompt&prompt_args={"key":"value"}`,
+			wantStatus: http.StatusInternalServerError,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			form := strings.NewReader(
-				"message=" + tt.message + "&chat_id=" + tt.chatID,
-			)
+			form := strings.NewReader(tt.formData)
 			req := httptest.NewRequest(tt.method, "/chat", form)
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			w := httptest.NewRecorder()
