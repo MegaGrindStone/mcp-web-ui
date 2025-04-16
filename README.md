@@ -1,5 +1,9 @@
 # MCP Web UI
 
+![CI](https://github.com/MegaGrindStone/mcp-web-ui/actions/workflows/ci.yml/badge.svg)
+[![Go Report Card](https://goreportcard.com/badge/github.com/MegaGrindStone/mcp-web-ui)](https://goreportcard.com/report/github.com/MegaGrindStone/mcp-web-ui)
+[![codecov](https://codecov.io/gh/MegaGrindStone/mcp-web-ui/branch/main/graph/badge.svg)](https://codecov.io/gh/MegaGrindStone/mcp-web-ui)
+
 MCP Web UI is a web-based user interface that serves as a Host within the Model Context Protocol (MCP) architecture. It provides a powerful and user-friendly interface for interacting with Large Language Models (LLMs) while managing context aggregation and coordination between clients and servers.
 
 ## 🌟 Overview
