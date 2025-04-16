@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/MegaGrindStone/go-mcp"
@@ -22,6 +23,7 @@ type mockLLM struct {
 }
 
 type mockStore struct {
+	sync.Mutex
 	chats    []models.Chat
 	messages map[string][]models.Message
 	err      error
@@ -349,13 +351,20 @@ func (m mockLLM) GenerateTitle(_ context.Context, _ string) (string, error) {
 }
 
 func (m *mockStore) Chats(_ context.Context) ([]models.Chat, error) {
+	m.Lock()
+	defer m.Unlock()
 	if m.err != nil {
 		return nil, m.err
 	}
-	return m.chats, nil
+	// Return a copy to avoid race conditions on the slice
+	chatsCopy := make([]models.Chat, len(m.chats))
+	copy(chatsCopy, m.chats)
+	return chatsCopy, nil
 }
 
 func (m *mockStore) AddChat(_ context.Context, chat models.Chat) (string, error) {
+	m.Lock()
+	defer m.Unlock()
 	if m.err != nil {
 		return "", m.err
 	}
@@ -364,6 +373,8 @@ func (m *mockStore) AddChat(_ context.Context, chat models.Chat) (string, error)
 }
 
 func (m *mockStore) UpdateChat(_ context.Context, chat models.Chat) error {
+	m.Lock()
+	defer m.Unlock()
 	idx := slices.IndexFunc(m.chats, func(c models.Chat) bool { return c.ID == chat.ID })
 	if idx == -1 {
 		return fmt.Errorf("chat not found")
@@ -373,13 +384,20 @@ func (m *mockStore) UpdateChat(_ context.Context, chat models.Chat) error {
 }
 
 func (m *mockStore) Messages(_ context.Context, chatID string) ([]models.Message, error) {
+	m.Lock()
+	defer m.Unlock()
 	if m.err != nil {
 		return nil, m.err
 	}
-	return m.messages[chatID], nil
+	// Return a copy to avoid race conditions on the slice
+	messagesCopy := make([]models.Message, len(m.messages[chatID]))
+	copy(messagesCopy, m.messages[chatID])
+	return messagesCopy, nil
 }
 
 func (m *mockStore) AddMessage(_ context.Context, chatID string, msg models.Message) (string, error) {
+	m.Lock()
+	defer m.Unlock()
 	if m.err != nil {
 		return "", m.err
 	}
@@ -388,5 +406,7 @@ func (m *mockStore) AddMessage(_ context.Context, chatID string, msg models.Mess
 }
 
 func (m *mockStore) UpdateMessage(_ context.Context, _ string, _ models.Message) error {
+	m.Lock()
+	defer m.Unlock()
 	return m.err
 }
