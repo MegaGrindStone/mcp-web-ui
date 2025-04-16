@@ -1,0 +1,5 @@
+ignore:
+  - "cmd"
+  - "internal/services"
+  - "static"
+  - "templates"
