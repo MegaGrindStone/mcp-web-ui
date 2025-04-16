@@ -57,6 +57,7 @@ func main() {
 	}
 
 	mcpClients, stdIOCmds := populateMCPClients(cfg, mcpClientInfo, logger)
+	mcpClis := make([]handlers.MCPClient, len(mcpClients))
 
 	for i, cli := range mcpClients {
 		logger.Info("Connecting to MCP server", slog.Int("index", i))
@@ -70,12 +71,12 @@ func main() {
 		}
 		connectCancel()
 
-		mcpClients[i] = cli
+		mcpClis[i] = cli
 
 		logger.Info("Connected to MCP server", slog.String("name", mcpClients[i].ServerInfo().Name))
 	}
 
-	m, err := handlers.NewMain(llm, titleGen, boltDB, mcpClients, logger)
+	m, err := handlers.NewMain(llm, titleGen, boltDB, mcpClis, logger)
 	if err != nil {
 		panic(err)
 	}

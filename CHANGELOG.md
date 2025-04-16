@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add refresh title feature to refresh chat title from LLM
 - Implement MCP Prompts functionality
+- Add `MCPClient` interface for testing purposes
 
 ### Fixed
 

@@ -38,6 +38,20 @@ type Store interface {
 	UpdateMessage(ctx context.Context, chatID string, message models.Message) error
 }
 
+// MCPClient defines the interface for interacting with an MCP server.
+// This allows for mocking in tests.
+type MCPClient interface {
+	ServerInfo() mcp.Info
+	ToolServerSupported() bool
+	ResourceServerSupported() bool
+	PromptServerSupported() bool
+	ListTools(ctx context.Context, params mcp.ListToolsParams) (mcp.ListToolsResult, error)
+	ListResources(ctx context.Context, params mcp.ListResourcesParams) (mcp.ListResourcesResult, error)
+	ListPrompts(ctx context.Context, params mcp.ListPromptsParams) (mcp.ListPromptResult, error)
+	GetPrompt(ctx context.Context, params mcp.GetPromptParams) (mcp.GetPromptResult, error)
+	CallTool(ctx context.Context, params mcp.CallToolParams) (mcp.CallToolResult, error)
+}
+
 // Main handles the core functionality of the chat application, managing server-sent events,
 // HTML templates, and interactions between the LLM and Store components.
 type Main struct {
@@ -48,7 +62,7 @@ type Main struct {
 	titleGenerator TitleGenerator
 	store          Store
 
-	mcpClients []*mcp.Client
+	mcpClients []MCPClient
 
 	servers   []mcp.Info
 	tools     []mcp.Tool
@@ -73,7 +87,7 @@ func NewMain(
 	llm LLM,
 	titleGen TitleGenerator,
 	store Store,
-	mcpClients []*mcp.Client,
+	mcpClients []MCPClient,
 	logger *slog.Logger,
 ) (Main, error) {
 	// We parse templates from three distinct directories to separate layout, pages, and partial views

@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -29,11 +30,32 @@ type mockStore struct {
 	err      error
 }
 
+type mockMCPClient struct {
+	serverInfo              mcp.Info
+	toolServerSupported     bool
+	resourceServerSupported bool
+	promptServerSupported   bool
+
+	tools     []mcp.Tool
+	resources []mcp.Resource
+	prompts   []mcp.Prompt
+
+	getPromptResult mcp.GetPromptResult
+	callToolResult  mcp.CallToolResult
+
+	err error
+}
+
 func TestNewMain(t *testing.T) {
 	llm := &mockLLM{}
 	store := &mockStore{}
+	mcpClient := &mockMCPClient{
+		serverInfo: mcp.Info{
+			Name: "Test Server",
+		},
+	}
 
-	main, err := handlers.NewMain(llm, llm, store, nil, slog.Default())
+	main, err := handlers.NewMain(llm, llm, store, []handlers.MCPClient{mcpClient}, slog.Default())
 	if err != nil {
 		t.Fatalf("NewMain() error = %v", err)
 	}
@@ -58,8 +80,13 @@ func TestHandleHome(t *testing.T) {
 			}}},
 		},
 	}
+	mcpClient := &mockMCPClient{
+		serverInfo: mcp.Info{
+			Name: "Test Server",
+		},
+	}
 
-	main, err := handlers.NewMain(llm, llm, store, nil, slog.Default())
+	main, err := handlers.NewMain(llm, llm, store, []handlers.MCPClient{mcpClient}, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,15 +135,47 @@ func TestHandleChats(t *testing.T) {
 		messages: map[string][]models.Message{},
 	}
 
-	main, err := handlers.NewMain(llm, llm, store, nil, slog.Default())
-	if err != nil {
-		t.Fatal(err)
+	// Setup MCP client with prompt support for testing prompt functionality
+	mcpClient := &mockMCPClient{
+		serverInfo: mcp.Info{
+			Name: "Test Server",
+		},
+		promptServerSupported: true,
+		prompts: []mcp.Prompt{
+			{Name: "test_prompt"},
+		},
+		getPromptResult: mcp.GetPromptResult{
+			Messages: []mcp.PromptMessage{
+				{
+					Role: "user",
+					Content: mcp.Content{
+						Type: mcp.ContentTypeText,
+						Text: "Prompt generated text",
+					},
+				},
+			},
+		},
+		toolServerSupported: true,
+		tools: []mcp.Tool{
+			{Name: "test_tool"},
+		},
+		callToolResult: mcp.CallToolResult{
+			Content: []mcp.Content{
+				{
+					Type: mcp.ContentTypeText,
+					Text: "Tool execution result",
+				},
+			},
+			IsError: false,
+		},
 	}
 
 	tests := []struct {
 		name       string
 		method     string
 		formData   string
+		store      *mockStore
+		llm        *mockLLM
 		wantStatus int
 	}{
 		{
@@ -143,7 +202,7 @@ func TestHandleChats(t *testing.T) {
 			formData:   "message=Hello&chat_id=1",
 			wantStatus: http.StatusOK,
 		},
-		// Testing prompt functionality with invalid inputs
+		// Testing prompt functionality
 		{
 			name:       "Invalid prompt arguments",
 			method:     http.MethodPost,
@@ -151,10 +210,10 @@ func TestHandleChats(t *testing.T) {
 			wantStatus: http.StatusInternalServerError,
 		},
 		{
-			name:       "Prompt without args",
+			name:       "Valid prompt with empty args",
 			method:     http.MethodPost,
-			formData:   `prompt_name=test_prompt`,
-			wantStatus: http.StatusInternalServerError,
+			formData:   `prompt_name=test_prompt&prompt_args={}`,
+			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "Prompt not found",
@@ -162,16 +221,89 @@ func TestHandleChats(t *testing.T) {
 			formData:   `prompt_name=unknown_prompt&prompt_args={"key":"value"}`,
 			wantStatus: http.StatusInternalServerError,
 		},
+		// Test cases for error paths
+		{
+			name:       "Store error when adding message",
+			method:     http.MethodPost,
+			formData:   "message=Hello",
+			store:      &mockStore{err: fmt.Errorf("database error")},
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:     "Continue chat with pending tool call",
+			method:   http.MethodPost,
+			formData: "chat_id=existing-chat&message=Hello",
+			store: &mockStore{
+				messages: map[string][]models.Message{
+					"existing-chat": {
+						{
+							ID:   "last-msg",
+							Role: models.RoleAssistant,
+							Contents: []models.Content{
+								{
+									Type:       models.ContentTypeCallTool,
+									ToolName:   "test_tool",
+									ToolInput:  json.RawMessage(`{"param":"value"}`),
+									CallToolID: "tool-call-1",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:     "Tool not found",
+			method:   http.MethodPost,
+			formData: "chat_id=existing-chat&message=Hello",
+			store: &mockStore{
+				messages: map[string][]models.Message{
+					"existing-chat": {
+						{
+							ID:   "last-msg",
+							Role: models.RoleAssistant,
+							Contents: []models.Content{
+								{
+									Type:       models.ContentTypeCallTool,
+									ToolName:   "unknown_tool", // Tool that doesn't exist
+									ToolInput:  json.RawMessage(`{"param":"value"}`),
+									CallToolID: "tool-call-1",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantStatus: http.StatusOK,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Use custom store and LLM if provided in the test case
+			currentStore := store
+			if tt.store != nil {
+				currentStore = tt.store
+			}
+
+			currentLLM := llm
+			if tt.llm != nil {
+				currentLLM = tt.llm
+			}
+
+			testMain, err := handlers.NewMain(currentLLM, currentLLM, currentStore,
+				[]handlers.MCPClient{mcpClient}, slog.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			form := strings.NewReader(tt.formData)
 			req := httptest.NewRequest(tt.method, "/chat", form)
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			w := httptest.NewRecorder()
 
-			main.HandleChats(w, req)
+			testMain.HandleChats(w, req)
 
 			if w.Code != tt.wantStatus {
 				t.Errorf("HandleChats() status = %v, want %v", w.Code, tt.wantStatus)
@@ -203,8 +335,13 @@ func TestHandleRefreshTitle(t *testing.T) {
 				},
 			},
 		}
+		mcpClient := &mockMCPClient{
+			serverInfo: mcp.Info{
+				Name: "Test Server",
+			},
+		}
 
-		main, err := handlers.NewMain(llm, llm, store, nil, slog.Default())
+		main, err := handlers.NewMain(llm, llm, store, []handlers.MCPClient{mcpClient}, slog.Default())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -232,12 +369,13 @@ func TestHandleRefreshTitle(t *testing.T) {
 
 	// Test various error cases
 	tests := []struct {
-		name       string
-		method     string
-		chatID     string
-		messages   map[string][]models.Message
-		err        error
-		wantStatus int
+		name        string
+		method      string
+		chatID      string
+		messages    map[string][]models.Message
+		err         error
+		titleGenErr bool
+		wantStatus  int
 	}{
 		{
 			name:       "Invalid method",
@@ -299,18 +437,50 @@ func TestHandleRefreshTitle(t *testing.T) {
 			err:        fmt.Errorf("store error"),
 			wantStatus: http.StatusInternalServerError,
 		},
+		{
+			name:   "Title generator error",
+			method: http.MethodPost,
+			chatID: "1",
+			messages: map[string][]models.Message{
+				"1": {
+					{
+						ID:   "msg1",
+						Role: models.RoleUser,
+						Contents: []models.Content{
+							{
+								Type: models.ContentTypeText,
+								Text: "Hello",
+							},
+						},
+					},
+				},
+			},
+			titleGenErr: true,
+			wantStatus:  http.StatusInternalServerError,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			llm := &mockLLM{}
+			if tt.titleGenErr {
+				llm = &mockLLM{
+					err: fmt.Errorf("title generation failed"),
+				}
+			}
+
 			store := &mockStore{
 				chats:    []models.Chat{{ID: "1", Title: "Old Title"}},
 				messages: tt.messages,
 				err:      tt.err,
 			}
+			mcpClient := &mockMCPClient{
+				serverInfo: mcp.Info{
+					Name: "Test Server",
+				},
+			}
 
-			main, err := handlers.NewMain(llm, llm, store, nil, slog.Default())
+			main, err := handlers.NewMain(llm, llm, store, []handlers.MCPClient{mcpClient}, slog.Default())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -326,6 +496,53 @@ func TestHandleRefreshTitle(t *testing.T) {
 				t.Errorf("HandleRefreshTitle() status = %v, want %v", w.Code, tt.wantStatus)
 			}
 		})
+	}
+}
+
+func TestMCPToolInteractions(t *testing.T) {
+	// Test tool call functionality
+	llm := &mockLLM{
+		responses: []string{"I'll use a tool"},
+	}
+	store := &mockStore{
+		messages: map[string][]models.Message{},
+	}
+
+	// Setup MCP client with tool support
+	mcpClient := &mockMCPClient{
+		serverInfo: mcp.Info{
+			Name: "Test Server",
+		},
+		toolServerSupported: true,
+		tools: []mcp.Tool{
+			{Name: "test_tool"},
+		},
+		callToolResult: mcp.CallToolResult{
+			Content: []mcp.Content{
+				{
+					Type: mcp.ContentTypeText,
+					Text: "Tool execution result",
+				},
+			},
+			IsError: false,
+		},
+	}
+
+	main, err := handlers.NewMain(llm, llm, store, []handlers.MCPClient{mcpClient}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a chat with a message that will trigger tool call
+	form := strings.NewReader("message=Use the test_tool")
+	req := httptest.NewRequest(http.MethodPost, "/chat", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	main.HandleChats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("HandleChats() status = %v, want %v", w.Code, http.StatusOK)
 	}
 }
 
@@ -347,6 +564,9 @@ func (m mockLLM) Chat(_ context.Context, _ []models.Message, _ []mcp.Tool) iter.
 }
 
 func (m mockLLM) GenerateTitle(_ context.Context, _ string) (string, error) {
+	if m.err != nil {
+		return "", m.err
+	}
 	return "Test Chat", nil
 }
 
@@ -405,8 +625,73 @@ func (m *mockStore) AddMessage(_ context.Context, chatID string, msg models.Mess
 	return msg.ID, nil
 }
 
-func (m *mockStore) UpdateMessage(_ context.Context, _ string, _ models.Message) error {
+func (m *mockStore) UpdateMessage(_ context.Context, chatID string, msg models.Message) error {
 	m.Lock()
 	defer m.Unlock()
-	return m.err
+	if m.err != nil {
+		return m.err
+	}
+
+	// Find and update the message
+	for i, existingMsg := range m.messages[chatID] {
+		if existingMsg.ID == msg.ID {
+			m.messages[chatID][i] = msg
+			return nil
+		}
+	}
+
+	// If no matching message found, add it
+	m.messages[chatID] = append(m.messages[chatID], msg)
+	return nil
+}
+
+func (m *mockMCPClient) ServerInfo() mcp.Info {
+	return m.serverInfo
+}
+
+func (m *mockMCPClient) ToolServerSupported() bool {
+	return m.toolServerSupported
+}
+
+func (m *mockMCPClient) ResourceServerSupported() bool {
+	return m.resourceServerSupported
+}
+
+func (m *mockMCPClient) PromptServerSupported() bool {
+	return m.promptServerSupported
+}
+
+func (m *mockMCPClient) ListTools(_ context.Context, _ mcp.ListToolsParams) (mcp.ListToolsResult, error) {
+	if m.err != nil {
+		return mcp.ListToolsResult{}, m.err
+	}
+	return mcp.ListToolsResult{Tools: m.tools}, nil
+}
+
+func (m *mockMCPClient) ListResources(_ context.Context, _ mcp.ListResourcesParams) (mcp.ListResourcesResult, error) {
+	if m.err != nil {
+		return mcp.ListResourcesResult{}, m.err
+	}
+	return mcp.ListResourcesResult{Resources: m.resources}, nil
+}
+
+func (m *mockMCPClient) ListPrompts(_ context.Context, _ mcp.ListPromptsParams) (mcp.ListPromptResult, error) {
+	if m.err != nil {
+		return mcp.ListPromptResult{}, m.err
+	}
+	return mcp.ListPromptResult{Prompts: m.prompts}, nil
+}
+
+func (m *mockMCPClient) GetPrompt(_ context.Context, _ mcp.GetPromptParams) (mcp.GetPromptResult, error) {
+	if m.err != nil {
+		return mcp.GetPromptResult{}, m.err
+	}
+	return m.getPromptResult, nil
+}
+
+func (m *mockMCPClient) CallTool(_ context.Context, _ mcp.CallToolParams) (mcp.CallToolResult, error) {
+	if m.err != nil {
+		return mcp.CallToolResult{}, m.err
+	}
+	return m.callToolResult, nil
 }
