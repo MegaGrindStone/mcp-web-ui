@@ -123,6 +123,37 @@ func (m Main) HandleChats(w http.ResponseWriter, r *http.Request) {
 		userMessages = []models.Message{m.processUserMessage(msg)}
 	}
 
+	// Handle attached resources
+	attachedResourcesJSON := r.FormValue("attached_resources")
+	if attachedResourcesJSON != "" && attachedResourcesJSON != "[]" {
+		var resourceURIs []string
+		if err := json.Unmarshal([]byte(attachedResourcesJSON), &resourceURIs); err != nil {
+			m.logger.Error("Failed to unmarshal attached resources",
+				slog.String("attachedResources", attachedResourcesJSON),
+				slog.String(errLoggerKey, err.Error()))
+			http.Error(w, "Invalid attached resources format", http.StatusBadRequest)
+			return
+		}
+
+		// Process resources and add resource contents to user message
+		if len(resourceURIs) > 0 {
+			resourceContents, err := m.processAttachedResources(r.Context(), resourceURIs)
+			if err != nil {
+				m.logger.Error("Failed to process attached resources",
+					slog.String("resourceURIs", fmt.Sprintf("%v", resourceURIs)),
+					slog.String(errLoggerKey, err.Error()))
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			// Add resource contents to the last user message
+			if len(userMessages) > 0 {
+				lastMsgIdx := len(userMessages) - 1
+				userMessages[lastMsgIdx].Contents = append(userMessages[lastMsgIdx].Contents, resourceContents...)
+			}
+		}
+	}
+
 	// Add all user messages to the chat
 	for _, msg := range userMessages {
 		msgID, err := m.store.AddMessage(r.Context(), chatID, msg)
@@ -340,6 +371,33 @@ func (m Main) processUserMessage(message string) models.Message {
 		},
 		Timestamp: time.Now(),
 	}
+}
+
+// processAttachedResources processes attached resource URIs from the form data
+// and returns content objects for each resource.
+func (m Main) processAttachedResources(ctx context.Context, resourceURIs []string) ([]models.Content, error) {
+	var contents []models.Content
+
+	for _, uri := range resourceURIs {
+		clientIdx, ok := m.resourcesMap[uri]
+		if !ok {
+			return nil, fmt.Errorf("resource not found: %s", uri)
+		}
+
+		result, err := m.mcpClients[clientIdx].ReadResource(ctx, mcp.ReadResourceParams{
+			URI: uri,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to read resource %s: %w", uri, err)
+		}
+
+		contents = append(contents, models.Content{
+			Type:             models.ContentTypeResource,
+			ResourceContents: result.Contents,
+		})
+	}
+
+	return contents, nil
 }
 
 // renderNewChatResponse renders the complete chatbox for new chats.
@@ -593,6 +651,9 @@ func (m Main) chat(chatID string, messages []models.Message) {
 				callTool = true
 				aiMsg.Contents = append(aiMsg.Contents, content)
 				contentIdx++
+			case models.ContentTypeResource:
+				m.logger.Error("Content type resource is not allowed")
+				return
 			case models.ContentTypeToolResult:
 				m.logger.Error("Content type tool results is not allowed")
 				return

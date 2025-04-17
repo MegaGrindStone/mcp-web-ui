@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +55,9 @@ type anthropicMessageContent struct {
 	// For text type.
 	Text string `json:"text,omitempty"`
 
+	// For image and document type.
+	Source *anthropicResourceContent `json:"source,omitempty"`
+
 	// For tool_use type.
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
@@ -63,6 +67,12 @@ type anthropicMessageContent struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+}
+
+type anthropicResourceContent struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type anthropicContentBlockStart struct {
@@ -248,61 +258,9 @@ func (a Anthropic) doRequest(
 	tools []mcp.Tool,
 	stream bool,
 ) (*http.Response, error) {
-	msgs := make([]anthropicMessage, 0, len(messages))
-	for _, msg := range messages {
-		if msg.Role == models.RoleUser {
-			if len(msg.Contents) != 1 {
-				return nil, fmt.Errorf("user message should only contain one content, got %d", len(msg.Contents))
-			}
-			msgs = append(msgs, anthropicMessage{
-				Role: string(msg.Role),
-				Content: []anthropicMessageContent{
-					{
-						Type: "text",
-						Text: msg.Contents[0].Text,
-					},
-				},
-			})
-			continue
-		}
-
-		contents := make([]anthropicMessageContent, 0, len(msg.Contents))
-
-		for _, ct := range msg.Contents {
-			switch ct.Type {
-			case models.ContentTypeText:
-				if ct.Text != "" {
-					contents = append(contents, anthropicMessageContent{
-						Type: "text",
-						Text: ct.Text,
-					})
-				}
-			case models.ContentTypeCallTool:
-				contents = append(contents, anthropicMessageContent{
-					Type:  "tool_use",
-					ID:    ct.CallToolID,
-					Name:  ct.ToolName,
-					Input: ct.ToolInput,
-				})
-				msgs = append(msgs, anthropicMessage{
-					Role:    string(msg.Role),
-					Content: contents,
-				})
-				contents = make([]anthropicMessageContent, 0, len(msg.Contents))
-			case models.ContentTypeToolResult:
-				msgs = append(msgs, anthropicMessage{
-					Role: "user",
-					Content: []anthropicMessageContent{
-						{
-							Type:      "tool_result",
-							ToolUseID: ct.CallToolID,
-							IsError:   ct.CallToolFailed,
-							Content:   ct.ToolResult,
-						},
-					},
-				})
-			}
-		}
+	msgs, err := a.convertMessages(messages)
+	if err != nil {
+		return nil, err
 	}
 
 	aTools := make([]anthropicTool, len(tools))
@@ -366,4 +324,151 @@ func (a Anthropic) doRequest(
 	}
 
 	return resp, nil
+}
+
+func (a Anthropic) convertMessages(messages []models.Message) ([]anthropicMessage, error) {
+	var msgs []anthropicMessage
+
+	for _, msg := range messages {
+		if msg.Role == models.RoleUser {
+			userMsg, err := a.processUserMessage(msg)
+			if err != nil {
+				return nil, err
+			}
+			msgs = append(msgs, userMsg)
+			continue
+		}
+
+		otherMsgs, err := a.processOtherRoleMessage(msg)
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, otherMsgs...)
+	}
+
+	return msgs, nil
+}
+
+func (a Anthropic) processUserMessage(msg models.Message) (anthropicMessage, error) {
+	contents := make([]anthropicMessageContent, 0, len(msg.Contents))
+
+	for _, ct := range msg.Contents {
+		switch ct.Type {
+		case models.ContentTypeText:
+			if ct.Text != "" {
+				contents = append(contents, anthropicMessageContent{
+					Type: "text",
+					Text: ct.Text,
+				})
+			}
+		case models.ContentTypeResource:
+			contents = append(contents, a.processResourceContents(ct.ResourceContents)...)
+		case models.ContentTypeCallTool, models.ContentTypeToolResult:
+			return anthropicMessage{}, fmt.Errorf("content type %s is not supported for user messages", ct.Type)
+		}
+	}
+
+	return anthropicMessage{
+		Role:    string(msg.Role),
+		Content: contents,
+	}, nil
+}
+
+func (a Anthropic) processOtherRoleMessage(msg models.Message) ([]anthropicMessage, error) {
+	var msgs []anthropicMessage
+	contents := make([]anthropicMessageContent, 0, len(msg.Contents))
+
+	for _, ct := range msg.Contents {
+		switch ct.Type {
+		case models.ContentTypeText:
+			if ct.Text != "" {
+				contents = append(contents, anthropicMessageContent{
+					Type: "text",
+					Text: ct.Text,
+				})
+			}
+		case models.ContentTypeCallTool:
+			contents = append(contents, anthropicMessageContent{
+				Type:  "tool_use",
+				ID:    ct.CallToolID,
+				Name:  ct.ToolName,
+				Input: ct.ToolInput,
+			})
+			msgs = append(msgs, anthropicMessage{
+				Role:    string(msg.Role),
+				Content: contents,
+			})
+			contents = make([]anthropicMessageContent, 0, len(msg.Contents))
+		case models.ContentTypeToolResult:
+			msgs = append(msgs, anthropicMessage{
+				Role: "user",
+				Content: []anthropicMessageContent{
+					{
+						Type:      "tool_result",
+						ToolUseID: ct.CallToolID,
+						IsError:   ct.CallToolFailed,
+						Content:   ct.ToolResult,
+					},
+				},
+			})
+		case models.ContentTypeResource:
+			return nil, fmt.Errorf("content type %s is not supported for assistant messages", ct.Type)
+		}
+	}
+
+	if len(contents) > 0 {
+		msgs = append(msgs, anthropicMessage{
+			Role:    string(msg.Role),
+			Content: contents,
+		})
+	}
+
+	return msgs, nil
+}
+
+func (a Anthropic) processResourceContents(resources []mcp.ResourceContents) []anthropicMessageContent {
+	var contents []anthropicMessageContent
+
+	for _, resource := range resources {
+		switch {
+		case strings.HasPrefix(resource.MimeType, "image/"):
+			blobData := resource.Blob
+			if !isBase64(blobData) {
+				blobData = base64.StdEncoding.EncodeToString([]byte(blobData))
+			}
+			contents = append(contents, anthropicMessageContent{
+				Type: "image",
+				Source: &anthropicResourceContent{
+					Type:      "base64",
+					MediaType: resource.MimeType,
+					Data:      blobData,
+				},
+			})
+		case resource.MimeType == "application/pdf":
+			blobData := resource.Blob
+			if !isBase64(blobData) {
+				blobData = base64.StdEncoding.EncodeToString([]byte(blobData))
+			}
+			contents = append(contents, anthropicMessageContent{
+				Type: "document",
+				Source: &anthropicResourceContent{
+					Type:      "base64",
+					MediaType: resource.MimeType,
+					Data:      blobData,
+				},
+			})
+		default:
+			// Anthropic only supports images and PDFs, so treat others as text
+			data := resource.Text
+			if data == "" {
+				data = resource.Blob
+			}
+			contents = append(contents, anthropicMessageContent{
+				Type: "text",
+				Text: fmt.Sprintf("[Document of type %s]\n%s", resource.MimeType, data),
+			})
+		}
+	}
+
+	return contents
 }

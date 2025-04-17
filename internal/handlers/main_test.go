@@ -675,6 +675,10 @@ func (m *mockMCPClient) ListResources(_ context.Context, _ mcp.ListResourcesPara
 	return mcp.ListResourcesResult{Resources: m.resources}, nil
 }
 
+func (m *mockMCPClient) ReadResource(_ context.Context, _ mcp.ReadResourceParams) (mcp.ReadResourceResult, error) {
+	return mcp.ReadResourceResult{}, nil
+}
+
 func (m *mockMCPClient) ListPrompts(_ context.Context, _ mcp.ListPromptsParams) (mcp.ListPromptResult, error) {
 	if m.err != nil {
 		return mcp.ListPromptResult{}, m.err

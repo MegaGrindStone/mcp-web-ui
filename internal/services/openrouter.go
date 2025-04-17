@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/MegaGrindStone/go-mcp"
 	"github.com/MegaGrindStone/mcp-web-ui/internal/models"
@@ -31,10 +33,10 @@ type OpenRouter struct {
 }
 
 type openRouterChatRequest struct {
-	Model    string              `json:"model"`
-	Messages []openRouterMessage `json:"messages"`
-	Tools    []openRouterTool    `json:"tools,omitempty"`
-	Stream   bool                `json:"stream"`
+	Model    string                     `json:"model"`
+	Messages []openRouterMessageRequest `json:"messages"`
+	Tools    []openRouterTool           `json:"tools,omitempty"`
+	Stream   bool                       `json:"stream"`
 
 	Temperature       *float32       `json:"temperature,omitempty"`
 	TopP              *float32       `json:"top_p,omitempty"`
@@ -51,6 +53,27 @@ type openRouterChatRequest struct {
 	TopLogprobs       *int           `json:"top_logprobs,omitempty"`
 	Stop              []string       `json:"stop,omitempty"`
 	IncludeReasoning  *bool          `json:"include_reasoning,omitempty"`
+}
+
+type openRouterMessageRequest struct {
+	Role       string                `json:"role"`
+	Content    any                   `json:"content,omitempty"`
+	ToolCalls  []openRouterToolCalls `json:"tool_calls,omitempty"`
+	ToolCallID string                `json:"tool_call_id,omitempty"`
+}
+
+type openRouterUserContent struct {
+	Type string `json:"type"`
+
+	// For text type.
+	Text string `json:"text,omitempty"`
+
+	// For image_url type.
+	ImageURL *openRouterImageContent `json:"image_url,omitempty"`
+}
+
+type openRouterImageContent struct {
+	URL string `json:"url"`
 }
 
 type openRouterMessage struct {
@@ -112,6 +135,9 @@ type openRouterChoice struct {
 
 const (
 	openRouterAPIEndpoint = "https://openrouter.ai/api/v1"
+
+	openRouterRequestContentTypeText     = "text"
+	openRouterRequestContentTypeImageURL = "image_url"
 )
 
 // NewOpenRouter creates a new OpenRouter instance with the specified API key, model name, and system prompt.
@@ -272,19 +298,31 @@ func (o OpenRouter) doRequest(
 	tools []mcp.Tool,
 	stream bool,
 ) (*http.Response, error) {
-	msgs := make([]openRouterMessage, 0, len(messages))
+	msgs := make([]openRouterMessageRequest, 0, len(messages))
+	// Process messages
 	for _, msg := range messages {
+		if msg.Role == models.RoleUser {
+			// Process user message with potential resources
+			userMsgs, err := o.processUserMessageForOpenRouter(msg)
+			if err != nil {
+				return nil, err
+			}
+			msgs = append(msgs, userMsgs)
+			continue
+		}
+
+		// Handle assistant and tool messages
 		for _, ct := range msg.Contents {
 			switch ct.Type {
 			case models.ContentTypeText:
 				if ct.Text != "" {
-					msgs = append(msgs, openRouterMessage{
+					msgs = append(msgs, openRouterMessageRequest{
 						Role:    string(msg.Role),
 						Content: ct.Text,
 					})
 				}
 			case models.ContentTypeCallTool:
-				msgs = append(msgs, openRouterMessage{
+				msgs = append(msgs, openRouterMessageRequest{
 					Role: "assistant",
 					ToolCalls: []openRouterToolCalls{
 						{
@@ -298,15 +336,18 @@ func (o OpenRouter) doRequest(
 					},
 				})
 			case models.ContentTypeToolResult:
-				msgs = append(msgs, openRouterMessage{
+				msgs = append(msgs, openRouterMessageRequest{
 					Role:       "tool",
 					ToolCallID: ct.CallToolID,
 					Content:    string(ct.ToolResult),
 				})
+			case models.ContentTypeResource:
+				return nil, fmt.Errorf("content type %s is not supported for assistant messages", ct.Type)
 			}
 		}
 	}
-	msgs = slices.Insert(msgs, 0, openRouterMessage{
+
+	msgs = slices.Insert(msgs, 0, openRouterMessageRequest{
 		Role:    "system",
 		Content: o.systemPrompt,
 	})
@@ -319,9 +360,9 @@ func (o OpenRouter) doRequest(
 		// bad request error (http 400), with message something like:
 		// GenerateContentRequest.parameters.properties: should be non-empty for OBJECT type
 		if len(parameters) > 0 {
-			var obj map[string]interface{}
+			var obj map[string]any
 			if err := json.Unmarshal(parameters, &obj); err == nil {
-				if props, ok := obj["properties"].(map[string]interface{}); ok && len(props) == 0 {
+				if props, ok := obj["properties"].(map[string]any); ok && len(props) == 0 {
 					parameters = nil
 				}
 			}
@@ -388,4 +429,81 @@ func (o OpenRouter) doRequest(
 	}
 
 	return resp, nil
+}
+
+func (o OpenRouter) processUserMessageForOpenRouter(msg models.Message) (openRouterMessageRequest, error) {
+	var contents []openRouterUserContent
+
+	for _, ct := range msg.Contents {
+		switch ct.Type {
+		case models.ContentTypeText:
+			if ct.Text != "" {
+				contents = append(contents, openRouterUserContent{
+					Type: openRouterRequestContentTypeText,
+					Text: ct.Text,
+				})
+			}
+		case models.ContentTypeResource:
+			for _, resource := range ct.ResourceContents {
+				if strings.HasPrefix(resource.MimeType, "image/") {
+					// Process image for OpenRouter
+					imageURL := processImageForOpenRouter(resource)
+
+					contents = append(contents, openRouterUserContent{
+						Type: openRouterRequestContentTypeImageURL,
+						ImageURL: &openRouterImageContent{
+							URL: imageURL,
+						},
+					})
+					continue
+				}
+
+				// For non-image resources, convert to text
+				resourceText := convertResourceToTextForOpenRouter(resource)
+				contents = append(contents, openRouterUserContent{
+					Type: openRouterRequestContentTypeText,
+					Text: resourceText,
+				})
+			}
+		case models.ContentTypeCallTool, models.ContentTypeToolResult:
+			return openRouterMessageRequest{}, fmt.Errorf("content type %s is not supported for user messages", ct.Type)
+		}
+	}
+
+	return openRouterMessageRequest{
+		Role:    string(msg.Role),
+		Content: contents,
+	}, nil
+}
+
+func processImageForOpenRouter(resource mcp.ResourceContents) string {
+	mimeType := resource.MimeType
+	if mimeType == "" {
+		mimeType = "image/png" // Default
+	}
+
+	var imageData string
+	if isBase64(resource.Blob) {
+		imageData = resource.Blob
+	} else {
+		imageData = base64.StdEncoding.EncodeToString([]byte(resource.Blob))
+	}
+
+	return fmt.Sprintf("data:%s;base64,%s", mimeType, imageData)
+}
+
+func convertResourceToTextForOpenRouter(resource mcp.ResourceContents) string {
+	if resource.Text != "" {
+		return fmt.Sprintf("[Document of type %s]\n%s", resource.MimeType, resource.Text)
+	}
+
+	if resource.Blob != "" {
+		data := resource.Blob
+		if !isBase64(resource.Blob) {
+			data = base64.StdEncoding.EncodeToString([]byte(resource.Blob))
+		}
+		return fmt.Sprintf("[Document of type %s]\n%s", resource.MimeType, data)
+	}
+
+	return ""
 }

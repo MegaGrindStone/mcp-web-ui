@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MegaGrindStone/go-mcp"
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting"
 	"github.com/yuin/goldmark/extension"
@@ -37,6 +38,9 @@ type Content struct {
 	// Text would be filled if Type is ContentTypeText.
 	Text string
 
+	// ResourceContents would be filled if Type is ContentTypeResource.
+	ResourceContents []mcp.ResourceContents
+
 	// ToolName would be filled if Type is ContentTypeCallTool.
 	ToolName string
 	// ToolInput would be filled if Type is ContentTypeCallTool.
@@ -59,19 +63,30 @@ type Role string
 type ContentType string
 
 const (
-	// RoleUser represents a user message. A message with this role would only contain text content.
+	// RoleUser represents a user message. A message with this role would only contain text or resource content.
 	RoleUser Role = "user"
-	// RoleAssistant represents an assistant message. A message with this role would contain text content
-	// and potentially other types of content.
+	// RoleAssistant represents an assistant message. A message with this role would contain
+	// all types of content but resource.
 	RoleAssistant Role = "assistant"
 
 	// ContentTypeText represents text content.
 	ContentTypeText ContentType = "text"
+	// ContentTypeResource represents a resource content.
+	ContentTypeResource ContentType = "resource"
 	// ContentTypeCallTool represents a call to a tool.
 	ContentTypeCallTool ContentType = "call_tool"
 	// ContentTypeToolResult represents the result of a tool call.
 	ContentTypeToolResult ContentType = "tool_result"
 )
+
+var mimeTypeToLanguage = map[string]string{
+	"text/x-go":        "go",
+	"text/golang":      "go",
+	"application/json": "json",
+	"text/javascript":  "javascript",
+	"text/html":        "html",
+	"text/css":         "css",
+}
 
 // RenderContents renders contents into a markdown string.
 func RenderContents(contents []Content) (string, error) {
@@ -83,6 +98,41 @@ func RenderContents(contents []Content) (string, error) {
 				continue
 			}
 			sb.WriteString(content.Text)
+		case ContentTypeResource:
+			if len(content.ResourceContents) == 0 {
+				continue
+			}
+			for _, resource := range content.ResourceContents {
+				sb.WriteString("  \n\n<details>\n")
+				sb.WriteString(fmt.Sprintf("<summary>Resource: %s</summary>\n\n", resource.URI))
+
+				if resource.MimeType != "" {
+					sb.WriteString(fmt.Sprintf("MIME Type: `%s`\n\n", resource.MimeType))
+				}
+
+				if resource.Text != "" {
+					// Use map for language determination
+					language := "text"
+					if lang, exists := mimeTypeToLanguage[resource.MimeType]; exists {
+						language = lang
+					}
+
+					sb.WriteString(fmt.Sprintf("```%s\n%s\n```\n", language, resource.Text))
+				} else if resource.Blob != "" {
+					// Handle binary content
+					if strings.HasPrefix(resource.MimeType, "image/") {
+						// Display images inline
+						sb.WriteString(fmt.Sprintf("<img src=\"data:%s;base64,%s\" alt=\"%s\" />\n",
+							resource.MimeType, resource.Blob, resource.URI))
+					} else {
+						// Provide download link for other binary content
+						sb.WriteString(fmt.Sprintf("<a href=\"data:%s;base64,%s\" download=\"%s\">Download %s</a>\n",
+							resource.MimeType, resource.Blob, resource.URI, resource.URI))
+					}
+				}
+
+				sb.WriteString("\n</details>  \n\n")
+			}
 		case ContentTypeCallTool:
 			sb.WriteString("  \n\n<details>\n")
 			sb.WriteString(fmt.Sprintf("<summary>Calling Tool: %s</summary>\n\n", content.ToolName))

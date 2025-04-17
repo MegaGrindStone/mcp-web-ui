@@ -47,6 +47,7 @@ type MCPClient interface {
 	PromptServerSupported() bool
 	ListTools(ctx context.Context, params mcp.ListToolsParams) (mcp.ListToolsResult, error)
 	ListResources(ctx context.Context, params mcp.ListResourcesParams) (mcp.ListResourcesResult, error)
+	ReadResource(ctx context.Context, params mcp.ReadResourceParams) (mcp.ReadResourceResult, error)
 	ListPrompts(ctx context.Context, params mcp.ListPromptsParams) (mcp.ListPromptResult, error)
 	GetPrompt(ctx context.Context, params mcp.GetPromptParams) (mcp.GetPromptResult, error)
 	CallTool(ctx context.Context, params mcp.CallToolParams) (mcp.CallToolResult, error)

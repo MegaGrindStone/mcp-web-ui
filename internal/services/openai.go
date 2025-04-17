@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"iter"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/MegaGrindStone/go-mcp"
 	"github.com/MegaGrindStone/mcp-web-ui/internal/models"
@@ -55,16 +57,16 @@ func openAIMessages(messages []models.Message) ([]goopenai.ChatCompletionMessage
 	msgs := make([]goopenai.ChatCompletionMessage, 0, len(messages))
 	for _, msg := range messages {
 		if msg.Role == models.RoleUser {
-			if len(msg.Contents) != 1 {
-				return nil, fmt.Errorf("user message should only contain one content, got %d", len(msg.Contents))
+			// Process user message with potential resources
+			userMsg, err := processUserMessageForOpenAI(msg)
+			if err != nil {
+				return nil, err
 			}
-			msgs = append(msgs, goopenai.ChatCompletionMessage{
-				Role:    string(msg.Role),
-				Content: msg.Contents[0].Text,
-			})
+			msgs = append(msgs, userMsg)
 			continue
 		}
 
+		// Handle assistant and other roles
 		for _, ct := range msg.Contents {
 			switch ct.Type {
 			case models.ContentTypeText:
@@ -94,10 +96,126 @@ func openAIMessages(messages []models.Message) ([]goopenai.ChatCompletionMessage
 					Content:    string(ct.ToolResult),
 					ToolCallID: ct.CallToolID,
 				})
+			case models.ContentTypeResource:
+				return nil, fmt.Errorf("content type %s is not supported for assistant messages", ct.Type)
 			}
 		}
 	}
 	return msgs, nil
+}
+
+func processUserMessageForOpenAI(msg models.Message) (goopenai.ChatCompletionMessage, error) {
+	// Check if we have any resource contents
+	hasResources := false
+	for _, ct := range msg.Contents {
+		if ct.Type == models.ContentTypeResource {
+			hasResources = true
+			break
+		}
+	}
+
+	// If no resources, combine all text contents
+	if !hasResources {
+		var textParts []string
+		for _, ct := range msg.Contents {
+			if ct.Type == models.ContentTypeText && ct.Text != "" {
+				textParts = append(textParts, ct.Text)
+			}
+		}
+		return goopenai.ChatCompletionMessage{
+			Role:    string(msg.Role),
+			Content: strings.Join(textParts, "\n\n"),
+		}, nil
+	}
+
+	// If we have resources, we need to use MultiContent
+	var contentParts []goopenai.ChatMessagePart
+	textContent := ""
+
+	for _, ct := range msg.Contents {
+		switch ct.Type {
+		case models.ContentTypeText:
+			if ct.Text != "" {
+				if textContent != "" {
+					textContent += "\n\n"
+				}
+				textContent += ct.Text
+			}
+		case models.ContentTypeResource:
+			for _, resource := range ct.ResourceContents {
+				if strings.HasPrefix(resource.MimeType, "image/") {
+					// Process image for OpenAI
+					imageURL := processImageForOpenAI(resource)
+
+					contentParts = append(contentParts, goopenai.ChatMessagePart{
+						Type: goopenai.ChatMessagePartTypeImageURL,
+						ImageURL: &goopenai.ChatMessageImageURL{
+							URL:    imageURL,
+							Detail: goopenai.ImageURLDetailAuto,
+						},
+					})
+				} else {
+					// For non-image resources, convert to text
+					resourceText := convertResourceToTextForOpenAI(resource)
+					if resourceText != "" {
+						if textContent != "" {
+							textContent += "\n\n"
+						}
+						textContent += resourceText
+					}
+				}
+			}
+		case models.ContentTypeCallTool, models.ContentTypeToolResult:
+			return goopenai.ChatCompletionMessage{}, fmt.Errorf("content type %s is not supported for user messages", ct.Type)
+		}
+	}
+
+	// Add text content as a part if we have any
+	if textContent != "" {
+		contentParts = append(contentParts, goopenai.ChatMessagePart{
+			Type: goopenai.ChatMessagePartTypeText,
+			Text: textContent,
+		})
+	}
+
+	return goopenai.ChatCompletionMessage{
+		Role:         string(msg.Role),
+		MultiContent: contentParts,
+	}, nil
+}
+
+func processImageForOpenAI(resource mcp.ResourceContents) string {
+	// Format should be: data:image/jpeg;base64,<base64-data>
+	mimeType := resource.MimeType
+	if mimeType == "" {
+		mimeType = "image/png" // Default
+	}
+
+	var imageData string
+	if isBase64(resource.Blob) {
+		imageData = resource.Blob
+	} else {
+		imageData = base64.StdEncoding.EncodeToString([]byte(resource.Blob))
+	}
+
+	return fmt.Sprintf("data:%s;base64,%s", mimeType, imageData)
+}
+
+func convertResourceToTextForOpenAI(resource mcp.ResourceContents) string {
+	if resource.Text != "" {
+		return fmt.Sprintf("[Document of type %s]\n%s", resource.MimeType, resource.Text)
+	}
+
+	// For binary data that isn't an image (e.g., PDF), provide base64 data
+	if resource.Blob != "" {
+		data := resource.Blob
+		if !isBase64(resource.Blob) {
+			data = base64.StdEncoding.EncodeToString([]byte(resource.Blob))
+		}
+		return fmt.Sprintf("[Document of type %s]\n%s", resource.MimeType, data)
+	}
+
+	return ""
 }
 
 // Chat is a wrapper around the OpenAI chat completion API.

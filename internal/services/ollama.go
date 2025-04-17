@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/MegaGrindStone/go-mcp"
 	"github.com/MegaGrindStone/mcp-web-ui/internal/models"
@@ -53,12 +55,32 @@ func ollamaMessages(messages []models.Message) ([]api.Message, error) {
 	msgs := make([]api.Message, 0, len(messages))
 	for _, msg := range messages {
 		if msg.Role == models.RoleUser {
-			if len(msg.Contents) != 1 {
-				return nil, fmt.Errorf("user message should only contain one content, got %d", len(msg.Contents))
+			// Process user messages with potential multiple contents
+			content := ""
+			var images []api.ImageData
+
+			for _, ct := range msg.Contents {
+				switch ct.Type {
+				case models.ContentTypeText:
+					content += ct.Text
+				case models.ContentTypeResource:
+					// Process resources (extract images, convert others to text)
+					textContent, extractedImages, err := processResourceContentsForOllama(ct.ResourceContents)
+					if err != nil {
+						return nil, err
+					}
+					content += textContent
+					images = append(images, extractedImages...)
+				case models.ContentTypeCallTool, models.ContentTypeToolResult:
+					return nil, fmt.Errorf("content type %s is not supported for user messages", ct.Type)
+				}
 			}
+
+			// Create user message with combined content and images
 			msgs = append(msgs, api.Message{
 				Role:    string(msg.Role),
-				Content: msg.Contents[0].Text,
+				Content: content,
+				Images:  images,
 			})
 			continue
 		}
@@ -93,10 +115,70 @@ func ollamaMessages(messages []models.Message) ([]api.Message, error) {
 					Role:    "tool",
 					Content: string(ct.ToolResult),
 				})
+			case models.ContentTypeResource:
+				return nil, fmt.Errorf("content type %s is not supported for assistant messages", ct.Type)
 			}
 		}
 	}
 	return msgs, nil
+}
+
+func processResourceContentsForOllama(resources []mcp.ResourceContents) (string, []api.ImageData, error) {
+	var textContent string
+	var images []api.ImageData
+
+	for _, resource := range resources {
+		switch {
+		case strings.HasPrefix(resource.MimeType, "image/"):
+			// Process images - convert to ImageData for Ollama
+			imageData, err := processImageForOllama(resource)
+			if err != nil {
+				return "", nil, err
+			}
+			images = append(images, imageData)
+		default:
+			// Convert other resources to text descriptions
+			description := convertResourceToText(resource)
+			if textContent != "" && description != "" {
+				textContent += "\n\n"
+			}
+			textContent += description
+		}
+	}
+
+	return textContent, images, nil
+}
+
+func processImageForOllama(resource mcp.ResourceContents) (api.ImageData, error) {
+	// If blob is already binary data, use it directly
+	if !isBase64(resource.Blob) {
+		return api.ImageData(resource.Blob), nil
+	}
+
+	// Decode base64 data
+	decodedData, err := base64.StdEncoding.DecodeString(resource.Blob)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding base64 image: %w", err)
+	}
+
+	return api.ImageData(decodedData), nil
+}
+
+func convertResourceToText(resource mcp.ResourceContents) string {
+	if resource.Text != "" {
+		return fmt.Sprintf("[Document of type %s]\n%s", resource.MimeType, resource.Text)
+	}
+
+	// For binary data that isn't an image (e.g., PDF), provide base64 data
+	if resource.Blob != "" {
+		data := resource.Blob
+		if !isBase64(resource.Blob) {
+			data = base64.StdEncoding.EncodeToString([]byte(resource.Blob))
+		}
+		return fmt.Sprintf("[Document of type %s]\n%s", resource.MimeType, data)
+	}
+
+	return ""
 }
 
 // Chat implements the LLM interface by streaming responses from the Ollama model. It accepts a context
@@ -238,7 +320,7 @@ func (o Ollama) chatRequest(messages []api.Message, tools []api.Tool, stream boo
 		Tools:    tools,
 	}
 
-	opts := make(map[string]interface{})
+	opts := make(map[string]any)
 
 	if o.params.Temperature != nil {
 		opts["temperature"] = *o.params.Temperature
