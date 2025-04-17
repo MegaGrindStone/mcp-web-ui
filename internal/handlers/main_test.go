@@ -40,8 +40,9 @@ type mockMCPClient struct {
 	resources []mcp.Resource
 	prompts   []mcp.Prompt
 
-	getPromptResult mcp.GetPromptResult
-	callToolResult  mcp.CallToolResult
+	getPromptResult  mcp.GetPromptResult
+	callToolResult   mcp.CallToolResult
+	readResourceFunc func(uri string) (mcp.ReadResourceResult, error)
 
 	err error
 }
@@ -135,7 +136,7 @@ func TestHandleChats(t *testing.T) {
 		messages: map[string][]models.Message{},
 	}
 
-	// Setup MCP client with prompt support for testing prompt functionality
+	// Setup MCP client with prompt and resource support
 	mcpClient := &mockMCPClient{
 		serverInfo: mcp.Info{
 			Name: "Test Server",
@@ -167,6 +168,39 @@ func TestHandleChats(t *testing.T) {
 				},
 			},
 			IsError: false,
+		},
+		resourceServerSupported: true,
+		resources: []mcp.Resource{
+			{URI: "file:///test.txt"},
+			{URI: "workspace:///sample.go"},
+		},
+		readResourceFunc: func(uri string) (mcp.ReadResourceResult, error) {
+			switch uri {
+			case "file:///test.txt":
+				return mcp.ReadResourceResult{
+					Contents: []mcp.ResourceContents{
+						{
+							URI:      uri,
+							MimeType: "text/plain",
+							Text:     "This is a test file",
+						},
+					},
+				}, nil
+			case "workspace:///sample.go":
+				return mcp.ReadResourceResult{
+					Contents: []mcp.ResourceContents{
+						{
+							URI:      uri,
+							MimeType: "text/x-go",
+							Text:     "package main\n\nfunc main() {\n\tfmt.Println(\"Hello\")\n}",
+						},
+					},
+				}, nil
+			case "error:///resource":
+				return mcp.ReadResourceResult{}, fmt.Errorf("failed to read resource")
+			default:
+				return mcp.ReadResourceResult{}, fmt.Errorf("resource not found")
+			}
 		},
 	}
 
@@ -220,6 +254,37 @@ func TestHandleChats(t *testing.T) {
 			method:     http.MethodPost,
 			formData:   `prompt_name=unknown_prompt&prompt_args={"key":"value"}`,
 			wantStatus: http.StatusInternalServerError,
+		},
+		// Resource handling test cases
+		{
+			name:       "Message with valid attached resources",
+			method:     http.MethodPost,
+			formData:   `message=Check these files&attached_resources=["file:///test.txt","workspace:///sample.go"]`,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "Invalid JSON in attached resources",
+			method:     http.MethodPost,
+			formData:   `message=Bad JSON&attached_resources=[invalid"json]`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "Resource not found",
+			method:     http.MethodPost,
+			formData:   `message=Missing resource&attached_resources=["unknown:///file.txt"]`,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "Error reading resource",
+			method:     http.MethodPost,
+			formData:   `message=Error case&attached_resources=["error:///resource"]`,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "Empty attached resources array",
+			method:     http.MethodPost,
+			formData:   `message=No attachments&attached_resources=[]`,
+			wantStatus: http.StatusOK,
 		},
 		// Test cases for error paths
 		{
@@ -675,8 +740,24 @@ func (m *mockMCPClient) ListResources(_ context.Context, _ mcp.ListResourcesPara
 	return mcp.ListResourcesResult{Resources: m.resources}, nil
 }
 
-func (m *mockMCPClient) ReadResource(_ context.Context, _ mcp.ReadResourceParams) (mcp.ReadResourceResult, error) {
-	return mcp.ReadResourceResult{}, nil
+func (m *mockMCPClient) ReadResource(_ context.Context, params mcp.ReadResourceParams) (mcp.ReadResourceResult, error) {
+	if m.err != nil {
+		return mcp.ReadResourceResult{}, m.err
+	}
+
+	if m.readResourceFunc != nil {
+		return m.readResourceFunc(params.URI)
+	}
+
+	return mcp.ReadResourceResult{
+		Contents: []mcp.ResourceContents{
+			{
+				URI:      params.URI,
+				MimeType: "text/plain",
+				Text:     "Mock resource content",
+			},
+		},
+	}, nil
 }
 
 func (m *mockMCPClient) ListPrompts(_ context.Context, _ mcp.ListPromptsParams) (mcp.ListPromptResult, error) {

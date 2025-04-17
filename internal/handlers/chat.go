@@ -50,9 +50,13 @@ func callToolError(err error) json.RawMessage {
 }
 
 // HandleChats processes chat interactions through HTTP POST requests,
-// managing both new chat creation and message handling. It supports two input methods:
+// managing both new chat creation and message handling. It supports three input methods:
 // 1. Regular messages via the "message" form field
 // 2. Predefined prompts via "prompt_name" and "prompt_args" form fields
+// 3. Attached resources via the "attached_resources" JSON array of resource URIs
+//
+// When resources are attached, they're processed and appended to the latest user message.
+// Resources are retrieved from registered MCP clients based on their URIs.
 //
 // The handler expects an optional "chat_id" field. If no chat_id is provided,
 // it creates a new chat session. For new chats, it asynchronously generates a title
@@ -64,8 +68,8 @@ func callToolError(err error) json.RawMessage {
 // generation that will be streamed via Server-Sent Events (SSE).
 //
 // The function returns appropriate HTTP error responses for invalid methods, missing required fields,
-// or internal processing errors. For successful requests, it renders the appropriate templates
-// with messages marked with correct streaming states.
+// resource processing failures, or internal processing errors. For successful requests, it renders
+// the appropriate templates with messages marked with correct streaming states.
 func (m Main) HandleChats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		m.logger.Error("Method not allowed", slog.String("method", r.Method))
