@@ -5,18 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2025-04-17
+
+This update introduces comprehensive Model Control Protocol (MCP) functionality for enhanced LLM interaction management, including prompts and resource handling systems, while also adding conversation title refresh capabilities and fixing Anthropic API compatibility issues.
 
 ### Added
 
-- Add refresh title feature to refresh chat title from LLM
-- Implement MCP Prompts functionality
-- Add `MCPClient` interface for testing purposes
-- Implement MCP Resource handling
+- Add chat title refresh functionality allowing automated regeneration of conversation titles using the LLM
+- Implement Model Control Protocol (MCP) Prompts system for standardized LLM interactions and enhanced prompt management
+- Add testing interface for Model Control Protocol client components to improve development reliability
+- Implement resource handling system for Model Control Protocol to manage and integrate external content
 
 ### Fixed
 
-- Trim whitespace from stop sequences parameters on `Anthropic`, because Anthropic API doesn't support it
+- Resolve Anthropic API compatibility issue by automatically trimming whitespace from stop sequence parameters
 
 ## [0.1.1] - 2025-04-05
 
