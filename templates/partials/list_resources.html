@@ -1,0 +1,48 @@
+<!-- List Resources -->
+<div class="accordion-item">
+    <h2 class="accordion-header">
+        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseTwo">
+            Resources
+        </button>
+    </h2>
+    <div id="collapseThree" class="accordion-collapse collapse" data-bs-parent="#mcpAccordion">
+        <div class="accordion-body">
+            <div class="list-group list-group-flush">
+                {{range $index, $resource := .Resources}}
+                <div class="list-group-item" role="button" style="cursor: pointer" 
+                    onclick="showResourceModal({{$index}})">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span>{{$resource.Name}}</span>
+                    </div>
+                </div>
+                {{end}}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Resource Modal -->
+<div class="modal fade" id="resourceModal" tabindex="-1" aria-labelledby="resourceModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="resourceModalLabel">Resource Information</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <h6 id="resourceName"></h6>
+                <p id="resourceDescription" class="mb-3"></p>
+                <div class="mb-3">
+                    <strong>URI:</strong> <span id="resourceUri"></span>
+                </div>
+                <div class="mb-3">
+                    <strong>MIME Type:</strong> <span id="resourceMimeType"></span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="useResourceBtn">Use Resource</button>
+            </div>
+        </div>
+    </div>
+</div>
