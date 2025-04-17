@@ -109,17 +109,6 @@ function showPromptModal(promptIndex) {
         form.querySelector('input[name="prompt_name"]').value = promptName;
         form.querySelector('input[name="prompt_args"]').value = JSON.stringify(args);
         
-        // Set up a one-time event listener for after the request completes
-        form.addEventListener('htmx:afterRequest', function afterRequest() {
-            // Restore the required attribute and clear prompt fields
-            textarea.setAttribute('required', '');
-            form.querySelector('input[name="prompt_name"]').value = '';
-            form.querySelector('input[name="prompt_args"]').value = '';
-            
-            // Remove this event listener to prevent it from firing on future requests
-            form.removeEventListener('htmx:afterRequest', afterRequest);
-        }, { once: true });
-        
         // Submit the form
         htmx.trigger(form, 'submit');
         
@@ -227,8 +216,45 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Clean up the resources list
-    if (typeof resourcesList !== 'undefined') {
-        resourcesList = resourcesList.filter(item => item !== undefined);
+    // Clear any prompt data on page load
+    const isWelcomePage = document.getElementById('chat-form-welcome') !== null;
+    const formId = isWelcomePage ? 'chat-form-welcome' : 'chat-form-chatbox';
+    const form = document.getElementById(formId);
+
+    // Clear any attached resources on page load
+    clearAttachedResources();
+    
+    if (form) {
+        const promptNameInput = form.querySelector('input[name="prompt_name"]');
+        if (promptNameInput) promptNameInput.value = '';
+        
+        const promptArgsInput = form.querySelector('input[name="prompt_args"]');
+        if (promptArgsInput) promptArgsInput.value = '';
+    }
+});
+
+document.addEventListener('htmx:beforeRequest', function(event) {
+    const form = event.detail.elt;
+    
+    // Only process if this is one of our chat forms
+    if (form.id === 'chat-form-welcome' || form.id === 'chat-form-chatbox') {
+        // Set up a one-time event listener for after the request completes
+        form.addEventListener('htmx:afterRequest', function afterRequest() {
+            // Restore the required attribute and clear prompt fields  
+            const textarea = form.querySelector('textarea[name="message"]');
+            if (textarea) textarea.setAttribute('required', '');
+            
+            const promptNameInput = form.querySelector('input[name="prompt_name"]');
+            if (promptNameInput) promptNameInput.value = '';
+            
+            const promptArgsInput = form.querySelector('input[name="prompt_args"]');
+            if (promptArgsInput) promptArgsInput.value = '';
+            
+            // Clear attached resources after submission
+            clearAttachedResources();
+            
+            // Remove this event listener
+            form.removeEventListener('htmx:afterRequest', afterRequest);
+        }, { once: true });
     }
 });
